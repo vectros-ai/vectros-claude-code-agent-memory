@@ -1,0 +1,52 @@
+{
+  "name": "@vectros-ai/claude-code-agent-memory",
+  "version": "0.11.0",
+  "description": "Cross-session memory for Claude Code: recall relevant context automatically at the start of a turn, distill durable lessons out of a session involuntarily, and dispose them into your Vectros knowledge base under your own review. Pre-1.0 / beta.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vectros-ai/vectros-claude-code-agent-memory",
+    "directory": "packages/claude-code-agent-memory"
+  },
+  "homepage": "https://vectros.ai",
+  "type": "module",
+  "bin": {
+    "claude-code-agent-memory": "./dist/cli.mjs"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup && node scripts/copy-assets.mjs",
+    "test": "node src/tests/run-all.mjs",
+    "lint": "eslint .",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "vectros",
+    "claude-code",
+    "claude",
+    "agent-memory",
+    "memory",
+    "hooks",
+    "mcp",
+    "recall"
+  ],
+  "dependencies": {},
+  "optionalDependencies": {
+    "@napi-rs/keyring": "^1.3.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@types/node": "^20.0.0",
+    "eslint": "^9.39.4",
+    "globals": "^15.14.0",
+    "tsup": "^8.0.0"
+  }
+}

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.npmrc.ci
+
+# tsup leaves these on incremental builds
+*.tmp
