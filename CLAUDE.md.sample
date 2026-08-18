@@ -1,0 +1,90 @@
+<!--
+  A sample CLAUDE.md section for an agent working in a project where this package's hooks are
+  deployed. Copy what's useful into your own project's (or user-level) CLAUDE.md — this isn't
+  meant to be dropped in verbatim and left untouched; it's a starting point, adapted from the
+  actual operating principles this package's own authors run day to day.
+
+  Why this exists at all: the hooks do the mechanical part (inject on prompt, distill on Stop,
+  queue for review) without being asked. But good JUDGMENT about what to do with what recall
+  hands you, and what's actually worth turning into a durable memory, isn't mechanical — that's
+  a discipline an agent has to be told, the same way any other working convention is. This is
+  that discipline, written down.
+-->
+
+## Working with recall (this project's agent memory)
+
+A `UserPromptSubmit` hook queries your Vectros store automatically and injects relevant hits
+before you see the prompt. You do not have to ask for this — it already ran.
+
+- **If something was injected, read it before you start working.** It's there because it matched
+  the prompt (or, on the first turn of a session, several derived facets of it) — it's not
+  optional color.
+- **A hit is authoritative for what was *decided* — not evidence of what the code *currently
+  does*.** A memory can tell you a past session settled on an approach, chose a convention, or
+  hit a specific gotcha. It cannot tell you the code still works that way today; verify current
+  behavior against the code and its tests, the same as you would from a comment or a doc.
+- **Check for staleness before trusting a hit at face value** — if the record or doc a hit points
+  at carries some kind of status/superseded marker, a superseded item can still rank highly by
+  similarity; don't treat "it matched" as "it's still true."
+- **If nothing was injected, that is not the same as "nothing relevant exists."** Recall is a
+  best-effort search over a rolling window of the conversation, not an exhaustive one. If you're
+  about to make a nontrivial decision and nothing surfaced, consider querying the store yourself
+  before assuming there's nothing to find — silence from an automatic pass is a weaker signal
+  than a deliberate search that came back empty.
+- **A hit that shows up mid-task, related to code you just touched rather than to the original
+  ask, is signal — not noise.** The prompt that kicked off a task can miss context that becomes
+  obvious once you're actually in the code; a later hit catching that is the mechanism working as
+  intended, not a distraction to wave off.
+
+## Deciding what to do with a proposed candidate
+
+When a session accumulates enough new transcript, a background worker distills candidates —
+durable facts, decisions, gotchas — and stages them in a review queue. Nothing in that queue is
+searchable or written to your knowledge base until you (or the agent, with the right tool access)
+explicitly disposes of it via `dispose.mjs`. Settling one well is worth more than settling one
+fast. Three questions, asked of every candidate before you settle it — and it's the second and
+third that are easy to skip:
+
+1. **Is it actually true?** Verify against the thing that *determines* the behavior — the code,
+   the config, the live state — never against a document that merely *describes* it. A doc can be
+   stale; the artifact it describes can't lie to you the same way.
+2. **Is it already known?** Before storing, check whether this is already covered — by an
+   existing memory record, by your repo's own documentation, or by something a reader could
+   derive on demand from the code or its history. Storing a near-duplicate doesn't just waste
+   space; every stored record is recalled into future sessions' context, so a redundant one taxes
+   every session that comes after it for no benefit.
+3. **Would a future session actually act differently for having read this?** This is the bar that
+   does the real filtering, and it's the one that's easiest to let slide. True-and-novel is not
+   sufficient on its own — ask it of a session that never lived through this one: would reading
+   this record change a decision, or would the session have landed in the same place anyway? A
+   play-by-play of what happened ("fixed X, tests passed"), a fact the code or its own tests
+   already answer on demand, or a restatement of something already documented elsewhere all fail
+   this test even when they're completely true.
+
+Settle accordingly:
+
+- **Genuinely durable and novel** → `stored:<record-id>` (or point it at documentation you just
+  wrote — `documented:path#anchor`). If it's the kind of thing another contributor should be able
+  to find in your repo's own conventions doc rather than only through semantic search, write it
+  there and dispose the candidate as `documented`, not `stored` — a convention that's discoverable
+  by reading the file, not just by getting lucky with a query, serves readers who never asked
+  recall the right question.
+- **Doesn't clear question 1 or 2** → `ignored:<reason>`, and say *why* — a bare ignore is a black
+  box to whoever reads the disposition log later, including a future you.
+- **Not sure yet** → leave it pending rather than guess. A wrong `ignored` deletes a candidate that
+  won't come back; a wrong `stored` pollutes every future session's recall. Pending costs nothing
+  but a line in the queue — a pending candidate keeps getting surfaced to whichever session is
+  around, on purpose, so it is never silently forgotten. It doesn't stay pending forever, though:
+  if nobody settles it, the orphan-cap backstop (see the README) eventually auto-disposes it
+  `ignored` on its own. That backstop is insurance against a candidate rotting in the queue
+  unbounded — it is not a substitute for actually reviewing, and it's always reversible with
+  `--reopen` if it acted on something that deserved a second look.
+
+## The loop is provisional by design — use that
+
+Recall injects automatically; capture distills automatically; but disposition is a decision, on
+purpose. Nothing you capture reaches another session's context until something — you, or an agent
+you've trusted with the tool access — has looked at it and said yes. Don't try to route around
+that by disposing everything as `stored` reflexively to "clear the queue" — an unreviewed queue is
+honest about what it is; a queue full of low-value stored records is not, and it's much harder to
+notice and fix later.

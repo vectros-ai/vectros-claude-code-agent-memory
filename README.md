@@ -232,6 +232,22 @@ Every tunable the loop uses (retrieval window sizes, debounce timers, budget cap
 `config.mjs` in the runtime directory, with its shipped default and an env-var override
 (`VECTROS_MEM_<KEY>`) — `report.mjs`'s output shows which are in force.
 
+## Prompting your agent to use this well
+
+The hooks handle the mechanics — inject on prompt, distill on Stop, queue for review — without
+being asked. What they can't do is tell your agent *how to think* about what recall hands it, or
+what's actually worth turning into a durable memory versus left pending or ignored. That's a
+working discipline, not a mechanism, and it's worth writing down the same way any other project
+convention is.
+
+[`CLAUDE.md.sample`](CLAUDE.md.sample) is a starting point for that — not meant to be dropped in
+verbatim, but adapted from the real operating principles this package's own authors run day to
+day: treat a recall hit as authoritative for what a past session *decided*, never as evidence of
+what the code *currently does*; before disposing a candidate, ask whether it's actually true
+(verified against the code, not a description of it), whether it's already known, and whether a
+future session would really act differently for having read it; leave a candidate pending rather
+than guess when you're not sure. Copy what's useful into your own project's CLAUDE.md.
+
 ## Contributing / running the test suite
 
 ```bash

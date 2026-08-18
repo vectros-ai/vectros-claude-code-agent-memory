@@ -3,6 +3,20 @@
 All notable changes to `@vectros-ai/claude-code-agent-memory` are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.12.0
+
+Pre-1.0 / beta.
+
+### Added
+
+- **`CLAUDE.md.sample`** — a starting-point CLAUDE.md section for prompting your agent to use
+  this loop well: how to treat a recall hit (authoritative for what a past session *decided*,
+  never evidence of what the code *currently does*), and the three questions worth asking before
+  disposing a candidate (is it true, is it already known, would a future session actually act
+  differently for having read it). The hooks handle the mechanics; this is the judgment layer
+  they can't supply on their own. Referenced from the README's new "Prompting your agent to use
+  this well" section.
+
 ## 0.11.0
 
 Initial release. Pre-1.0 / beta.
