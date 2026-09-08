@@ -1333,7 +1333,7 @@ export const SWEEP_MAX_ENUMERATE = V.SWEEP_MAX_ENUMERATE;
  * fronting WAF's CRS content-inspection rules (CrossSiteScripting_Body/GenericLFI_Body/
  * GenericRFI_Body/EC2MetaDataSSRF_Body stay in Block mode there — unlike /v1/records and
  * /v1/documents — because /v1/search feeds a real Lucene query_string sink, a genuine past
- * injection class on this codebase; see platform/api-services/gateway-edge-partner.yaml). Both
+ * injection class on this codebase. Both
  * `search()` callers build their query from `state.lastAssistant` (stop.mjs stashes the last
  * assistant message VERBATIM, no sanitization), and Claude Code's own hook-payload markup
  * (`<task-notification>…</task-notification>`, `<tool-use-id>…</tool-use-id>`) legitimately
@@ -1361,9 +1361,12 @@ const QUERY_MAX_BYTES = V.RECALL_QUERY_MAX_BYTES;
  * catches every harness-tag shape actually observed, without eating `<T>`/`<String>`/`x < y`.
  *
  * Strips the tag DELIMITERS only, not the content between them — a plain, minimal transformation
- * that removes the specific shape the WAF has actually been observed flagging, without guessing at
- * the rest of the CRS surface (`../`, IP-literal patterns, etc.) with no observed evidence of
- * tripping this yet. Whitespace is then collapsed so a removed tag doesn't jam
+ * that removes the specific shape the WAF has actually been observed flagging. It was originally
+ * scoped to this one shape only, "without guessing at the rest of the CRS surface (`../`,
+ * IP-literal patterns, etc.) with no observed evidence of tripping this yet" — that evidence has
+ * since arrived (path traversal / SSRF literals / SQL comment idioms all independently observed
+ * tripping `/v1/search`), so those three now have their own neutralizers below, run in the same
+ * pipeline. Whitespace is then collapsed so a removed tag doesn't jam
  * adjacent words together — recall.mjs's own tail already does the same `\s+` -> ' ' normalization
  * separately; collapsing again here is idempotent, not a behavior change for text that never had a
  * tag in it (confirmed by recall-query-cap-test.mjs's existing byte-for-byte assertions).
@@ -1373,8 +1376,78 @@ function stripHarnessMarkup(s) {
   return s.replace(HARNESS_TAG_RE, ' ').replace(/[ \t]+/g, ' ');
 }
 
+/**
+ * Break the literal `../`/`..\` byte pattern `GenericLFI_BODY` matches. Unlike the tag-stripper
+ * above, there is no "legitimate vs malicious" line to walk here: a prior dogfood measurement of
+ * this WAF label found an ordinary relative markdown link (`../README.md`) trips it exactly as
+ * hard as a real traversal payload does — the WAF has no way to tell them apart on this shape, so
+ * neither does this function. The only goal is defeating the literal contiguous match while
+ * keeping every path segment intact for similarity search: inserting a single space between `..`
+ * and its slash leaves `etc`/`passwd`/`README.md`/… all still present as their own tokens.
+ */
+const PATH_TRAVERSAL_RE = /\.\.([\\/])/g;
+function neutralizePathTraversal(s) {
+  return s.replace(PATH_TRAVERSAL_RE, '.. $1');
+}
+
+/**
+ * Break the literal SSRF-shaped byte patterns `EC2MetaDataSSRF_BODY` matches. A live sampled-
+ * request sweep found this label is NOT scoped to the cloud metadata IP alone — it also fires on
+ * plain loopback literals (`127.0.0.1`) and the bare hostname `localhost`, i.e. any private/
+ * loopback/link-local-shaped address. That breadth is exactly why this is worth fixing here beyond
+ * the one canonical example: this hook's own dogfood vocabulary (`127.0.0.1:PORT`, a local test-DB
+ * port, `localhost`) is dense with the shape, so an ordinary local-dev-workflow session can trip
+ * this, not only a security-engineering one. Same technique as path traversal — insert a space
+ * (or, for the bare word, a mid-word space) to defeat the literal match without discarding any
+ * digit/word the similarity search could use.
+ *
+ * Deliberately does NOT validate octet range (0-255) — any bare 4-part dotted number gets the same
+ * treatment, including one that isn't a real IP (a hypothetical 4-segment version/build string).
+ * That's the right tradeoff here: the cost of a false match is a harmless extra space, while a
+ * stricter per-octet regex buys precision this function doesn't need and a real WAF byte-pattern
+ * match likely doesn't bother with either.
+ */
+const IPV4_RE = /\b(\d{1,3})\.(\d{1,3}\.\d{1,3}\.\d{1,3})\b/g;
+const LOCALHOST_RE = /\blocalhost\b/gi;
+function neutralizeSsrfLiterals(s) {
+  return s.replace(IPV4_RE, '$1 .$2').replace(LOCALHOST_RE, 'local host');
+}
+
+/**
+ * Break the classic SQL-injection comment-terminator idiom (`admin'--`, `1=1--`, `(1)--`) that
+ * trips `CrossSiteScripting_BODY` via its libinjection SQL fingerprinting (no dedicated SQLi
+ * managed group is deployed — see clampQuery's own docstring; the XSS rule catches SQL-shaped
+ * text as a side effect). Deliberately the narrowest of the four neutralizers: libinjection
+ * TOKENIZES and normalizes whitespace before fingerprinting, so — unlike the three above — a bare
+ * space cannot defeat it for genuine SQL syntax, and this codebase's own conversations are dense
+ * with `--flag` CLI syntax and real SQL code examples (RDS/DDB migration discussions) that must
+ * not be corrupted chasing full coverage. So this targets ONLY the one shape a real injection
+ * payload needs and ordinary CLI/prose usage doesn't produce: a comment terminator immediately
+ * preceded by a quote, paren, or digit — the tautology/statement-close shape. A `--` preceded by
+ * whitespace or start-of-token (`--verbose`, `-- a note`) is left untouched, and so, deliberately,
+ * are bare keywords (`SELECT`, `DROP`, …) and bare semicolons — there is no cheap client-side
+ * transform that defeats a real tokenizer on those without mangling legitimate SQL text, so this
+ * stays a documented residual rather than an attempted (and likely both incomplete AND
+ * collateral-damaging) fix.
+ *
+ * Quote characters are `\x27`/`\x22` (single/double), not literal `'`/`"`, INSIDE the character
+ * class — not a style nit. This repo's own static-scan tooling (`lintlib.mjs`'s `blank()`, which
+ * every `*-census-test.mjs`/`*-lint-test.mjs` runs over this exact file) has no concept of a regex
+ * literal: it tracks only `//`, `/* *\/`, and quoted strings, so a BARE `'` sitting inside a
+ * `/[...]/ ` character class reads to it as the OPEN of an unterminated string and blanks
+ * everything from there to the next stray `'` it happens to find later in the file — verified live:
+ * a literal-quote version of this regex made `tunable-census-test.mjs` report `clampQuery` itself
+ * as absent. The hex escape is byte-identical to the engine, invisible to `blank()`.
+ */
+const SQL_COMMENT_IDIOM_RE = /([\x27\x22)\d])--+/g;
+function neutralizeSqlCommentIdiom(s) {
+  return s.replace(SQL_COMMENT_IDIOM_RE, '$1- -');
+}
+
 export function clampQuery(s) {
-  const str = stripHarnessMarkup(String(s ?? ''));
+  const str = neutralizeSqlCommentIdiom(
+    neutralizeSsrfLiterals(neutralizePathTraversal(stripHarnessMarkup(String(s ?? '')))),
+  );
   const charClamped = str.length > RECALL_QUERY_MAX_CHARS ? str.slice(0, RECALL_QUERY_MAX_CHARS) : str;
   if (Buffer.byteLength(JSON.stringify(charClamped), 'utf8') <= QUERY_MAX_BYTES) return charClamped; // fast path
 

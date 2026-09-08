@@ -93,12 +93,33 @@ check('RED-proof: a protocol STRING literal is NOT caught (BEGIN/END markers are
 console.log('\n=== 2. every SPEC key is actually consumed by a module ===');
 const consumers = RUNTIME.filter((f) => f !== 'config.mjs').map((f) => [f, blank(src(f))]);
 const configCode = blank(src('config.mjs'));
+/**
+ * `RECALL_QUERY_MAX_CHARS` / `RECALL_QUERY_MAX_BYTES` are consumed by `clampQuery`, which lives in
+ * config.mjs itself — the shared outbound-request boundary. Consumed, not dangling — but that
+ * "consumed within config.mjs itself" exception is scoped to an EXPLICIT allowlist of exactly
+ * these two keys (mirroring `NOT_A_TUNABLE` above), NOT a generic "appears anywhere in config.mjs"
+ * rule. A generic whole-file check was tried and is WORSE than the bug it would replace: every
+ * SPEC key's own property declaration lives somewhere in this same file, so testing `\bkey\b`
+ * against the whole file is trivially true for ANY key, dangling or not — silently defeating this
+ * section's entire purpose for every key that ever reaches this fallback.
+ *
+ * Checked against the WHOLE file, not a window anchored to `clampQuery`'s position — an EARLIER
+ * version anchored FORWARD from `clampQuery`'s definition and broke on `RECALL_QUERY_MAX_BYTES`
+ * specifically: its only literal appearance is the alias line `const QUERY_MAX_BYTES =
+ * V.RECALL_QUERY_MAX_BYTES;`, which sits BEFORE `clampQuery`'s definition (the function body
+ * itself only ever reads the renamed local `QUERY_MAX_BYTES`, never the SPEC key's own name) — so
+ * a forward-only slice can never see it, and a BACKWARD-anchored version has the exact 4000-char
+ * fixed-lookback problem this whole rewrite exists to kill. The allowlist gate is what makes
+ * "whole file" safe here: only these two named keys ever reach this branch at all, so there is no
+ * key left for a whole-file match to falsely launder.
+ */
+const CLAMP_QUERY_CONSUMED_KEYS = new Set(['RECALL_QUERY_MAX_CHARS', 'RECALL_QUERY_MAX_BYTES']);
+function consumedWithinConfigMjs(key) {
+  return CLAMP_QUERY_CONSUMED_KEYS.has(key) && new RegExp(`\\b${key}\\b`).test(configCode);
+}
 const orphans = [];
 for (const key of Object.keys(SPEC)) {
-  const used = consumers.some(([, code]) => new RegExp(`\\b${key}\\b`).test(code))
-    // `RECALL_QUERY_MAX_CHARS` / `RECALL_QUERY_MAX_BYTES` are consumed by `clampQuery`, which lives
-    // in config.mjs itself — the shared outbound-request boundary. Consumed, not dangling.
-    || new RegExp(`\\b${key}\\b[\\s\\S]*clampQuery|clampQuery[\\s\\S]*\\b${key}\\b`).test(configCode.slice(configCode.indexOf('export function clampQuery') - 4000));
+  const used = consumers.some(([, code]) => new RegExp(`\\b${key}\\b`).test(code)) || consumedWithinConfigMjs(key);
   if (!used) orphans.push(key);
 }
 for (const o of orphans) console.log(`  DANGLING  ${o} — in SPEC, read by nothing`);
@@ -106,6 +127,12 @@ eq('no SPEC key is dead config', orphans.length, 0);
 check('RED-proof: the consumer scan can distinguish used from unused',
   consumers.some(([, code]) => /\bCONTEXT_CAP\b/.test(code))
   && !consumers.some(([, code]) => /\bDEFINITELY_NOT_A_REAL_KEY\b/.test(code)));
+check('RED-proof: the config.mjs fallback is allowlist-scoped, not "appears anywhere in config.mjs" '
+  + '— a real, non-allowlisted key (its own SPEC declaration necessarily lives in this file, same as '
+  + 'every other key’s) is correctly refused by the fallback anyway',
+  /\bSWEEP_MAX_ENUMERATE\b/.test(configCode) && !consumedWithinConfigMjs('SWEEP_MAX_ENUMERATE'));
+check('RED-proof: an ALLOWLISTED key genuinely referenced after clampQuery IS recognized as consumed',
+  consumedWithinConfigMjs('RECALL_QUERY_MAX_CHARS') && consumedWithinConfigMjs('RECALL_QUERY_MAX_BYTES'));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 3. EVERY ENTRY IS USABLE BY AN ADOPTER. The seam's contract, mechanised.

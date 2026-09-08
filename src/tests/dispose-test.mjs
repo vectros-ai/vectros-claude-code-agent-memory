@@ -572,6 +572,33 @@ console.log('\n=== RED-PROOF: --list renders candidate fields through field(), n
   try { fs.unlinkSync(DIRTY_QP); } catch {}
 }
 
+console.log('\n=== PAGINATION: a corpus larger than one page is not silently truncated ===');
+{
+  /**
+   * The candidate client used to send `cursor`, but `/v1/records/lookup` calls the resume field
+   * `startFrom` and rejects unknown keys — so every lookup past page 1 400'd. This fake server's
+   * own `nextCursor` used to be hardcoded `null` (see fake-records-server.mjs), so no test running
+   * through the REAL subprocess could ever reach page 2 to notice the wrong field name — the fake
+   * itself made the defect invisible. Force a genuine multi-page walk through the real subprocess +
+   * real HTTP fake, the same code path a live corpus over `CANDIDATE_PAGE_LIMIT` takes.
+   */
+  const PAGE_SID = 'dispose-test-pagination-0001';
+  const PAGE_QP = queueFor(PAGE_SID);
+  try { fs.unlinkSync(PAGE_QP); } catch {}
+  const N = 5;
+  for (let i = 0; i < N; i++) seedCandidate(PAGE_SID, { title: `page candidate ${i}` });
+  // A page size well under N forces several round trips, each carrying the previous page's cursor —
+  // a client that still sent `cursor` instead of `startFrom` would 400 on the second request.
+  const pagedEnv = { ...ENV, VECTROS_MEM_CANDIDATE_PAGE_LIMIT: '2' };
+  const r = await spawnAsync([path.join(DIR, 'dispose.mjs'), PAGE_SID, '--list'], { cwd: REPO, timeout: 30000, env: pagedEnv });
+  const out = (r.stdout || '') + (r.stderr || '');
+  check('a multi-page lookup exits clean', r.status === 0, `exit=${r.status}: ${out.slice(0, 300)}`);
+  check(`...and lists all ${N} candidates, not just the first page`,
+    out.includes(`${N} pending candidate(s) for ${PAGE_SID}`), out.slice(0, 300));
+  check('...never reporting RECORDS UNREACHABLE', !/RECORDS UNREACHABLE/.test(out), out.slice(0, 300));
+  try { fs.unlinkSync(PAGE_QP); } catch {}
+}
+
 console.log('\n=== RECORDS UNREACHABLE: dispose refuses outright rather than guessing an address ===');
 {
   // A bogus base URL that will never answer — the same "unrunnable, not empty" contract

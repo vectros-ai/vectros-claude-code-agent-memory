@@ -49,6 +49,12 @@ const ENV = { ...process.env, VECTROS_API_KEY: 'ssk_test_fake_for_nudge_budget_t
  * budget, so a large orientation can leave less than the nudge needs. Rather than simulate that
  * indirectly, shrink the budget itself through the config seam (`VECTROS_MEM_CONTEXT_CAP`) —
  * the supported way to move that number, and a far more direct statement of the condition under test.
+ *
+ * Because this no longer depends on candidate count, it stayed correct through a LATER, unrelated
+ * change to `fake-records-server.mjs`: that fake used to truncate any lookup to its first 100 rows
+ * (hardcoded `nextCursor: null`), so this file's 200 seeded candidates were silently read back as
+ * 100. The fake now paginates for real, and every one of the 200 is read back — harmless here only
+ * because this test's assertions were already re-anchored on the budget, not the count, above.
  */
 for (let i = 1; i <= 200; i++) {
   server.seed('candidate', {

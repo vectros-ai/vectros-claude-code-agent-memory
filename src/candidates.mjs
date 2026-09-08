@@ -569,7 +569,15 @@ async function lookup(body, opts) {
       // silently returns the indexed projection instead would leave every payload field
       // `undefined` — a candidate with no body, which reads as an empty queue rather than an
       // error. Nothing caps a candidate body, so that is one long proposal away.
-      { type: TYPE, limit: CANDIDATE_PAGE_LIMIT, includePayload: true, ...body, ...(cursor ? { cursor } : {}) },
+      //
+      // The resume field is `startFrom`, NOT `cursor` — the guessable name a prior version of
+      // this file sent. `/v1/records/lookup` rejects unknown keys (contract 3 above), so the
+      // wrong spelling 400s, but only once a corpus exceeds one page: `cursor` is falsy and
+      // omitted entirely on page 1, so the defect shipped invisibly until a real queue grew past
+      // `CANDIDATE_PAGE_LIMIT`. ECHO the value the previous page handed back in `nextCursor` —
+      // never derive one from a row — the cursor is opaque and authenticated server-side; a
+      // fabricated one fails verification with its own 400.
+      { type: TYPE, limit: CANDIDATE_PAGE_LIMIT, includePayload: true, ...body, ...(cursor ? { startFrom: cursor } : {}) },
       opts);
     if (!r) return null;
     const rows = Array.isArray(r.data?.data) ? r.data.data : (Array.isArray(r.data) ? r.data : null);

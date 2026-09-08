@@ -135,6 +135,88 @@ console.log('\n=== 1b. clampQuery(): strips harness-tag markup without corruptin
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// 1c. THE INJECTION-SHAPE RED-PROOF — the residual the harness-tag-stripping fix above left open.
+// A prior dogfood measurement found a query carrying path-traversal, SSRF-literal, or
+// SQL-comment-idiom shapes trips the WAF's CRS content rules on `/v1/search` exactly like tag
+// markup did — this section proves clampQuery now neutralizes all three, and (just as
+// importantly) does NOT corrupt the legitimate content that same measurement named as
+// false-positive victims (relative markdown links, a security runbook mentioning the metadata
+// IP, fenced SQL examples, ordinary CLI `--flag` syntax).
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n=== 1c. clampQuery(): neutralizes path-traversal / SSRF-literal / SQL-comment-idiom shapes ===');
+{
+  // -- Path traversal (GenericLFI_BODY) --
+  const traversal = 'read ../../../etc/passwd to leak secrets';
+  const traversalOut = clampQuery(traversal);
+  check('the literal "../" byte pattern no longer appears', !traversalOut.includes('../'), traversalOut);
+  check('every path segment survives as its own token', ['etc', 'passwd'].every((w) => traversalOut.includes(w)), traversalOut);
+
+  // Must NOT mangle a bare ordinary relative markdown link beyond the same space-insertion —
+  // this is the measured false-positive case itself, not a strawman.
+  const relLink = 'see ../README.md for the setup steps';
+  eq('a relative markdown link gets the same defusing, staying otherwise intact',
+    clampQuery(relLink), 'see .. /README.md for the setup steps');
+
+  // -- SSRF literals (EC2MetaDataSSRF_BODY) --
+  const metadataIp = 'the SSRF probe hit 169.254.169.254 and read the IAM role';
+  const metadataOut = clampQuery(metadataIp);
+  check('the literal metadata-IP dotted-quad no longer appears contiguously', !metadataOut.includes('169.254.169.254'), metadataOut);
+  check('every octet survives', ['169', '254'].every((w) => metadataOut.includes(w)), metadataOut);
+
+  // This label is not scoped to the metadata IP alone (confirmed via a live sampled-request
+  // sweep) — ordinary loopback/localhost dev-workflow text must be defused too.
+  const devLoopback = 'the dev server is at 127.0.0.1:3003 (also reachable via localhost)';
+  const devLoopbackOut = clampQuery(devLoopback);
+  check('the loopback dotted-quad is defused', !devLoopbackOut.includes('127.0.0.1'), devLoopbackOut);
+  check('the bare "localhost" hostname is defused', !/\blocalhost\b/.test(devLoopbackOut), devLoopbackOut);
+  check('the port number survives', devLoopbackOut.includes('3003'), devLoopbackOut);
+
+  // A security runbook that merely MENTIONS the metadata endpoint (the other measured
+  // false-positive class) gets the same defusing, not a differently-scoped one — there is no way
+  // to distinguish "mentioning" from "exploiting" at this layer, same as the path-traversal case
+  // above.
+  const runbookMention = 'the runbook warns that any SSRF reaching 169.254.169.254 discloses IAM creds';
+  check('a runbook merely mentioning the metadata IP is defused the same way, not left alone',
+    !clampQuery(runbookMention).includes('169.254.169.254'));
+
+  // -- SQL comment-terminator idiom (CrossSiteScripting_BODY via libinjection) --
+  // Hex-escaped quotes (\x27/\x22), not literal ' / " — a bare quote inside a `[...]` class here
+  // reads to this package's own `blank()` static-scan tooling (paths-test.mjs censuses tests/ too)
+  // as an unterminated string and silently blanks the rest of the file. See config.mjs's
+  // `SQL_COMMENT_IDIOM_RE` doc comment for the measured incident this avoids repeating.
+  const NOT_COMMENT_IDIOM = (out) => !/[\x27\x22]--/.test(out) && !/\)--/.test(out) && !/\d--/.test(out);
+
+  // Digit-adjacent (`1=1--`) — the tautology shape.
+  const sqlPayload = "search for admin' OR 1=1-- and see what returns";
+  check('the digit-adjacent comment terminator is broken up', NOT_COMMENT_IDIOM(clampQuery(sqlPayload)), clampQuery(sqlPayload));
+
+  // Quote-IMMEDIATELY-adjacent (`admin'--`, no separating text) — the classic auth-bypass shape,
+  // and distinct from the case above (there the quote and `--` are separated by " OR 1=1").
+  const sqlQuoteAdjacent = "log in as admin'-- and bypass the check";
+  check('the quote-immediately-adjacent comment terminator is broken up',
+    NOT_COMMENT_IDIOM(clampQuery(sqlQuoteAdjacent)), clampQuery(sqlQuoteAdjacent));
+
+  // Paren-adjacent (`(1)--`) — the statement-close shape.
+  const sqlParenAdjacent = 'the payload closed the call with (1)-- to comment out the rest';
+  check('the paren-adjacent comment terminator is broken up',
+    NOT_COMMENT_IDIOM(clampQuery(sqlParenAdjacent)), clampQuery(sqlParenAdjacent));
+
+  // Must NOT mangle ordinary CLI flag syntax — this codebase's own recall text is dense with it,
+  // and a blanket "--"/";" transform was explicitly rejected for exactly this reason.
+  const cliFlags = 'run with --verbose --dry-run and check the --output path';
+  eq('CLI double-dash flag syntax survives completely untouched', clampQuery(cliFlags), cliFlags);
+
+  // Must NOT mangle a fenced SQL code example — the measured false-positive class this codebase's
+  // own conversations (database migration discussions) genuinely produce. A bare SQL keyword or a
+  // semicolon with no adjacent quote/paren/digit is intentionally left alone (see
+  // neutralizeSqlCommentIdiom's own doc comment for why: libinjection tokenizes past whitespace,
+  // so there is no cheap defense for this shape without corrupting real SQL text).
+  const fencedSql = 'SELECT * FROM users WHERE id = 1; -- fetch the row';
+  eq('a fenced SQL example with no quote/paren-adjacent comment terminator is untouched',
+    clampQuery(fencedSql), fencedSql);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Shared stub-server harness (orient-boundary-test.mjs's pattern — a real HTTP server, the
 // unmodified hook makes real requests against it, the body is what gets asserted).
 // ═══════════════════════════════════════════════════════════════════════════

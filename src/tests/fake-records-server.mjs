@@ -69,6 +69,11 @@ function mergePatch(target, patch) {
  */
 export function startFakeRecordsServer() {
   const store = new Map(); // id -> { id, typeName, externalId, payload, createdAt, updatedAt }
+  // Opaque cursor -> offset. Minted here, never derived by a caller — mirrors the real API's
+  // authenticated, opaque cursors closely enough to catch a client that fabricates one (e.g. from
+  // a row id) rather than echoing back what a previous page handed it. One-shot: consumed on the
+  // request that presents it, so a caller cannot replay a stale page.
+  const cursors = new Map();
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
@@ -93,7 +98,17 @@ export function startFakeRecordsServer() {
     // POST /v1/records/lookup — filter by type + one field (or a declared composite pair).
     if (req.method === 'POST' && url.pathname === '/v1/records/lookup') {
       const body = await readBody(req);
-      const { type, field, value, values, from, to, limit } = body;
+      const { type, field, value, values, from, to, limit, startFrom } = body;
+      // The real API rejects EVERY unknown key with a 400 (candidates.mjs's own "contract 3"); this
+      // fake does not implement that generally — it stays lenient on fields it doesn't otherwise
+      // understand. It DOES reject this one specific wrong key, deliberately: `cursor` is exactly
+      // the field name a prior version of candidates.mjs sent instead of `startFrom`, and letting it
+      // through silently (destructured into nothing, `startFrom` reading `undefined`) would swap a
+      // fast, legible regression signal for a slow one — the caller would instead loop the full page
+      // bound re-fetching page 1 and only fail once exhausted (`dispose.mjs` reporting RECORDS
+      // UNREACHABLE, not a clean 400). Matching the real API's rejection here is what makes the
+      // pagination test's "sends the wrong key → 400" claim true, not just a description of intent.
+      if (body.cursor !== undefined) return send(res, 400, { message: 'unknown field: cursor (did you mean startFrom?)' });
       let rows = [...store.values()].filter((r) => r.typeName === type);
       if (field && field.includes(',')) {
         const fields = field.split(',');
@@ -108,8 +123,24 @@ export function startFakeRecordsServer() {
         rows = rows.filter((r) => String(r.payload[field] ?? '') === String(value));
       }
       rows.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-      const page = rows.slice(0, limit || rows.length).map(shape);
-      return send(res, 200, { data: page, nextCursor: null });
+      // REAL pagination, keyed on `startFrom` — not the hardcoded `nextCursor: null` this handler
+      // shipped with, which let a multi-page candidate lookup go untested by construction: the
+      // client sent the wrong field name and no test here could ever reach page 2 to notice.
+      let offset = 0;
+      if (startFrom !== undefined) {
+        if (!cursors.has(startFrom)) return send(res, 400, { message: `unrecognized startFrom cursor: ${startFrom}` });
+        offset = cursors.get(startFrom);
+        cursors.delete(startFrom);
+      }
+      const pageSize = limit || rows.length;
+      const page = rows.slice(offset, offset + pageSize).map(shape);
+      const nextOffset = offset + pageSize;
+      let nextCursor = null;
+      if (nextOffset < rows.length) {
+        nextCursor = crypto.randomUUID();
+        cursors.set(nextCursor, nextOffset);
+      }
+      return send(res, 200, { data: page, nextCursor });
     }
 
     // POST /v1/search — recall.mjs's hybrid-search call. Every consumer of this fake server is

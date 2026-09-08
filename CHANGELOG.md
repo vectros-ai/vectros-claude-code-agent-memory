@@ -3,6 +3,24 @@
 All notable changes to `@vectros-ai/claude-code-agent-memory` are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.13.0 — 2026-09-07
+
+Pre-1.0 / beta.
+
+### Fixed
+
+- **A review queue larger than one page (100+ pending candidates) could no longer be listed at
+  all.** Paging past the first page sent the resume cursor under the wrong field name, which the
+  API rejects outright — every listing read past page one failed instead of returning the rest of
+  the queue.
+- **Recall queries carrying path-traversal, SSRF-literal, or SQL-comment-idiom shapes no longer
+  silently lose recall.** The outbound `/v1/search` query is now normalized (at the same shared
+  boundary that already strips harness-tag markup) to defuse the specific byte patterns that could
+  trip the edge WAF's content-inspection rules — a query is never rejected outright by this hook,
+  but a tripped rule previously meant a silent, zero-hit search on exactly the sessions (security
+  engineering, or ordinary local-dev work mentioning `127.0.0.1`/`localhost`) most likely to need
+  a real hit back.
+
 ## 0.12.0
 
 Pre-1.0 / beta.

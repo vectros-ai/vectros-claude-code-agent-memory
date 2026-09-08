@@ -343,8 +343,17 @@ console.log('\n=== 9. a multi-page lookup is followed, never silently truncated 
     const r = await bySession('s', { fetchImpl: f.impl });
     eq('every page is followed', r.length, 5);
     eq('...taking one call per page', f.calls.length, 3);
-    eq('the first call sends no cursor', f.calls[0].body.cursor, undefined);
-    eq('...and each later one sends the previous page\'s', `${f.calls[1].body.cursor},${f.calls[2].body.cursor}`, 'c2,c3');
+    // The field name IS the regression this section exists to catch: the API's resume field is
+    // `startFrom`, not `cursor` — asserting the wrong key here would still pass if the client sent
+    // the guessable-but-wrong name, since nothing else in this fake distinguishes them.
+    eq('the first call sends no startFrom', f.calls[0].body.startFrom, undefined);
+    eq('...and each later one sends the previous page\'s', `${f.calls[1].body.startFrom},${f.calls[2].body.startFrom}`, 'c2,c3');
+    // Checked against the real `undefined` on EACH call (not a template-string stand-in for it —
+    // `${undefined}` and the literal string "undefined" render identically, so a stringified
+    // comparison would still pass a caller that sent that literal string as a cursor value).
+    eq('...and never under the wrong key (call 1)', f.calls[0].body.cursor, undefined);
+    eq('...and never under the wrong key (call 2)', f.calls[1].body.cursor, undefined);
+    eq('...and never under the wrong key (call 3)', f.calls[2].body.cursor, undefined);
     // The ordinals must be computed over the WHOLE set: numbering a truncated page means the `cN`
     // an agent was nudged with addresses a different candidate on the next run.
     eq('ordinals cover the full set', r[r.length - 1].ordinal, 'c5');
