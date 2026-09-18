@@ -67,9 +67,9 @@ console.log('\n=== 3. CLAUDE_CODE_OAUTH_TOKEN: env wins over the OS keychain ===
 // ⚠️ SKIPS BY DEFAULT ON A LOCAL MACHINE, even when @napi-rs/keyring is installed and usable —
 // this is a SAFETY gate, not a capability one. The entry this writes to (`KEYCHAIN_SERVICE`/
 // `OAUTH_ACCOUNT` in creds.mjs) is a FIXED, MACHINE-WIDE constant — the exact entry a real
-// deployment's real CLAUDE_CODE_OAUTH_TOKEN lives in. A second real incident: a routine `npm test` run
-// on a dogfood machine that had already migrated a real token into the keychain silently
-// deleted it — this case's OLD cleanup unconditionally called removeOAuthToken() with no regard
+// deployment's real CLAUDE_CODE_OAUTH_TOKEN lives in. A real failure mode: a routine `npm test` run
+// can silently delete a real token already migrated into the keychain
+// — this case's OLD cleanup unconditionally called removeOAuthToken() with no regard
 // for what was there before. Opt in explicitly (VECTROS_MEM_TEST_KEYCHAIN=1) once you've
 // confirmed this machine holds nothing you can't afford to lose, or rely on CI (which sets
 // VECTROS_REQUIRE_KEYCHAIN_TESTS=1 against a FRESH, disposable container with nothing real in
@@ -84,8 +84,8 @@ console.log('\n=== 4. CLAUDE_CODE_OAUTH_TOKEN: OS-keychain round trip ===');
       + 'VECTROS_MEM_TEST_KEYCHAIN=1 (only on a machine with nothing real in that entry) or run in CI');
   } else {
     delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
-    // Point the FILE tier at an isolated, empty temp file for this whole case — this machine's
-    // REAL credentials.json legitimately holds a real dogfood token (isolate.mjs deliberately
+    // Point the FILE tier at an isolated, empty temp file for this whole case — a real deployment's
+    // REAL credentials.json legitimately holds a real token (isolate.mjs deliberately
     // leaves credentials un-isolated for the *-real-test.mjs files' sake), and without this
     // override "after cleanup, the keychain is empty" would fall through to that real value
     // instead of '', which is correct production behaviour but makes THIS assertion depend on

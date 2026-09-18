@@ -12,8 +12,8 @@
 // That was a false green on this branch's marquee fix: revert `capture-worker` to tail-slice +
 // `markCaptured(total)` and the old file stayed green. Three places in the SAME COMMIT already
 // said the fake-binary seam was unusable on Windows — triage-test's own header, and
-// `drain-real-test.mjs`, which exists *because* of it. A cold panel found it; two of its own
-// agents disagreed until one checked the spawn semantics.
+// `drain-real-test.mjs`, which exists *because* of it. Found after initial disagreement,
+// resolved by checking the spawn semantics directly.
 //
 // WHAT IT IS NOW. A distiller that CANNOT RUN is a real scenario — a moved `claude.exe`, a wrong
 // `CLAUDE_CODE_BIN`, an expired token — and it is the path that must never advance the watermark.

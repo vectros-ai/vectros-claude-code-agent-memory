@@ -6,18 +6,18 @@
  * (pinned set + resumed-thread memory + the multi-query recall) happens in recall.mjs, on the
  * FIRST REAL USER PROMPT, which is the moment the session actually starts working.
  *
- * ── WHY THIS DOES NOTHING (measured 2026-07-15) ─────────────────────────────────────────────
+ * ── WHY THIS DOES NOTHING ────────────────────────────────────────────────────────────────────
  * This hook used to enumerate the pinned set and inject it here. Then the hook log grew a field
  * saying WHO started the session, and the answer was ugly:
  *
  *   ~180 sessions in 5h fired orient and NOTHING else — no recall, no evaluate, no stop. A
- *   steady ~1/min drip, never bursting, every one `source=startup cwd=<HOME>`. The owner runs
- *   3-6 real sessions; the rest were Claude Desktop spawning a session process in the home
+ *   steady ~1/min drip, never bursting, every one `source=startup cwd=<HOME>`. A typical user
+ *   runs 3-6 real sessions; the rest were Claude Desktop spawning a session process in the home
  *   directory about once a minute, which boots, fires SessionStart, and dies without ever
  *   taking a prompt. Caught in the act: a new `claude-code/…/claude.exe --output-format
  *   stream-json …` parented by the Desktop app, two seconds before each phantom orient.
  *
- * The rate, corrected (cold panel, 2026-07-16): 180 sessions in 5h is 864/day, not the ~1400/day
+ * The rate, corrected: 180 sessions in 5h is 864/day, not the ~1400/day
  * this comment originally claimed — and the live log measures 741 fires in 23.1h, ~770/day. The
  * load-bearing conclusion (>95% wasted, so move the enumeration to the first real PROMPT) HOLDS;
  * the headline number was inflated ~1.7x by arithmetic nobody re-did. Stated as measured, it was

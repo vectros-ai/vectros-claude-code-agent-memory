@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * UserPromptSubmit hook — L1 involuntary recall (agent-memory flagship dogfood).
+ * UserPromptSubmit hook — L1 involuntary recall.
  *
- * v2 (2026-07-13): the heuristic distinctive-term GATE is gone. The field
+ * The heuristic distinctive-term GATE is gone. The field
  * (mem0, Zep, Cline) always-retrieves and conditions the query on a ROLLING WINDOW
  * of recent conversation — not the bare user turn — which is the standard fix for
  * terse follow-ups ("go do it") and non-identifier domain phrases ("QW v6→v7") that
@@ -33,7 +33,7 @@ import { CONTEXT_CAP, STALE_SESSION_MS, HANDED_TTL_MS, clampQuery,
   RECALL_FACET_MAX_CHARS, KICKOFF_DOC_MAX_CHARS, ROLLING_TAIL_CHARS } from './config.mjs';
 import { SID_DISPLAY_LEN } from './paths.mjs';
 
-// Re-entrance guard: no-op inside the R2 evaluator's own nested `claude -p`
+// Re-entrance guard: no-op inside the mid-run evaluator's own nested `claude -p`
 // (which sets VECTROS_RECALL_EVAL=1), so it never re-fires the recall loop.
 if (process.env.VECTROS_RECALL_EVAL === '1') process.exit(0);
 
@@ -57,7 +57,7 @@ function readStdin() {
 }
 
 /**
- * THIS is where the state reset came from (fixed 2026-07-16). The old body was:
+ * THIS is where the state reset came from. The old body was:
  *
  *   try  { return { injectedIds: [], lastAssistant: '', promptCount: 0, ...JSON.parse(read(p)) }; }
  *   catch { return { injectedIds: [], lastAssistant: '', promptCount: 0 }; }
@@ -251,7 +251,7 @@ async function main() {
    * Is this an ORIENTATION moment (spend the multi-query) or steady state (single top-5)?
    *
    * `!promptCount` was a PROXY for "this is the kickoff" and it is wrong in BOTH directions
-   * (MEASURED 2026-07-15):
+   * (measured):
    *  - FALSE POSITIVE: recall that fails-open early and recovers later makes an ordinary
    *    mid-session prompt look like prompt #1. (Deploying the field-name fix did exactly this
    *    to every running session.)
@@ -297,7 +297,7 @@ async function main() {
 
   if (isFirstPrompt) {
     // ── ORIENT: the first prompt IS the kickoff/handoff — the richest query source a
-    // session ever gets. Spend here (multi-query, higher limit) so mid-run R2 can be a
+    // session ever gets. Spend here (multi-query, higher limit) so mid-run recall can be a
     // sparse drift-catcher rather than the primary mechanism. No inference: N cheap
     // parallel searches stay far inside the 30s UserPromptSubmit budget.
     //
@@ -335,7 +335,6 @@ async function main() {
     // arriving as a hit would make a stale MEMORY.md LOSSY — the pin invisible in BOTH channels, the
     // the "missing indistinguishable from broken" trap on the one tier where it matters most. A
     // relevant pin surfacing as a hit is at worst redundant with a fresh MEMORY.md, never invisible.
-    // (Cold-panel finding, 2026-07-18.)
     orientIds = idsOf(orientSet.thread);
     header =
       'Session orientation — recalled from your Vectros memory + curated KB by matching this ' +
@@ -351,8 +350,8 @@ async function main() {
   }
 
   /**
-   * The candidate nudge — capture's other half. Read the RECORD corpus (as of 2026-08-14, B2 —
-   * addressing lives in records now, not the local file fold) and surface unsettled candidates
+   * The candidate nudge — capture's other half. Read the RECORD corpus (addressing lives in
+   * records now, not the local file fold) and surface unsettled candidates
    * when the set has CHANGED since we last said so. → nudge.mjs for why the trigger is candidate
    * pressure and why it must not repeat; → candidates.mjs `addressablePending` for why this reads
    * `bySession`-derived stable ordinals rather than the faster-but-unstable `pendingForSession`.
@@ -415,7 +414,7 @@ async function main() {
    * `null` (unknown — an unreadable queue or a throw) does NOT pass. If we cannot tell whether this
    * session owes work, we do not hand it somebody else's.
    *
-   * This was caught in review by falsifying the comment that used to sit here, which asserted the
+   * This surfaced by falsifying the comment that used to sit here, which asserted the
    * two blocks were "mutually exclusive by construction". They were not. The assertion was written
    * before the predicate, and the predicate was chosen to be convenient rather than true.
    *
@@ -622,7 +621,7 @@ async function main() {
    * The orientation boundary is CONSUMED here, and only here — and only if an orientation was
    * REALLY DELIVERED. This is the same test as the line above it, applied to the flag.
    *
-   * THIRD ROUND OF ONE BUG. It was cleared on ENTRY (a network blip consumed the boundary and the
+   * ONE BUG, FIXED TWICE ALREADY AND STILL LIVE. It was cleared on ENTRY (a network blip consumed the boundary and the
    * session ran its whole life unoriented); that was fixed by moving the clear HERE, to "delivery".
    * But "delivery" was read as *"we reached the delivery code"* — and the guard above only returns
    * when hits AND orientLines AND nudge are ALL empty. So the interesting failure walks straight
@@ -641,12 +640,12 @@ async function main() {
    * enumeration now says so in the log (`enumerate lookup HTTP …`). The flag simply stays set and
    * the next healthy prompt orients — which is precisely what the flag means.
    *
-   * FOURTH ROUND, and the third round's gate was `orientPart.length && !orientDropped` — which
+   * AN EARLIER FIX'S gate was `orientPart.length && !orientDropped` — which
    * LATCHED FOREVER for anyone whose pinned tier is legitimately EMPTY. HTTP 200 `{data:[]}` →
    * `renderOrientBlock([], [])` → no lines → no `orientPart` → flag never cleared → `isFirstPrompt`
    * true on every prompt, for the life of the session. Which is to say: **every new user and every
-   * OSS adopter, and never this machine**, which has pinned records — a bug the dogfood was
-   * structurally incapable of surfacing. It cost ~6x the REST calls, and worse, it silently killed
+   * OSS adopter, and never a machine with pinned records already**, which was
+   * structurally incapable of surfacing this. It cost ~6x the REST calls, and worse, it silently killed
    * the rolling-window tail (stop.mjs's entire output, still being stashed for nobody), dropped
    * already-served hits without their `[recalled earlier]` line, and told the 50th prompt of the
    * session it was "matching this session's kickoff".
@@ -660,7 +659,7 @@ async function main() {
    * of it fit. An empty tier consumes the boundary, correctly: we owed an orientation and gave one.
    *
    * RE-OWE ONLY WHAT A RETRY COULD PLAUSIBLY FIX — this is the rule the flag actually needs, the
-   * one every round missed: *"still owed" is a retry claim — gate it on retryability, or bound it*.
+   * one every earlier fix missed: *"still owed" is a retry claim — gate it on retryability, or bound it*.
    * This line is the worked example.
    *
    * The gate was `orientOk && !orientDropped`; MEASURED, that predicate
@@ -681,8 +680,8 @@ async function main() {
    * search hit with its full text. That is the recovery path. Re-running the orient is not — it
    * re-renders the same block, drops the same lines, and eats the budget the hits needed.
    *
-   * FIFTH ROUND — and this time the PREDICATE was also UNREACHABLE. `orientOk` is unchanged from
-   * round 4; what changed is that a `return` no longer sits 150 lines above it.
+   * THE PREDICATE WAS ALSO UNREACHABLE. `orientOk` itself is correct; what makes it usable here is
+   * that a `return` no longer sits 150 lines above it.
    *
    * The nothing-to-inject guard's body was `writeState`, which made it a second, partial commit
    * site: `promptCount` written, these three fields skipped. That is accidentally correct for the
@@ -693,15 +692,15 @@ async function main() {
    *   orientPending            — "did we DO the orientation?"       → gate on the ACTION
    *
    * An orient that ran and had nothing to say is a COMPLETED orientation with no content. A
-   * content-gated commit site cannot see it — so every round that moved this line within the
-   * content model was answering the wrong question, in both directions (round 1 cleared it when
-   * nothing ran; round 3 kept it when nothing was there to run on).
+   * content-gated commit site cannot see it — so every earlier placement of this line within the
+   * content model answered the wrong question, in both directions (one cleared it when nothing
+   * ran; another kept it when nothing was there to run on).
    *
    * Hence: COMMIT, then decide whether to SPEAK. State is settled at exactly one site, and
    * "nothing to inject" is what it always was — an OUTPUT decision, made below, after this.
    */
   /**
-   * FIFTH LATCH, and the first one that latches OFF — i.e. the unrecoverable direction.
+   * THE FIRST FIX AT THIS SITE THAT LATCHES OFF — i.e. the unrecoverable direction.
    *
    * This was `if (isFirstPrompt && orientOk) state.orientPending = false`, so recall could only ever
    * WRITE false. It never re-owed anything; the flag survived a failure only by not being touched.
@@ -715,10 +714,10 @@ async function main() {
    * MEASURED before the fix: pre-flag state, enumeration 500, search up — prompt #1 orientPending
    * `undefined`, prompt #2 `undefined`, no orientation either time. Gone.
    *
-   * Every earlier round latched ON: over-offering, which the branch's own rule calls recoverable
-   * ("over-offering is recoverable, a false receipt is not"). This one is the false receipt — the
-   * boundary consumed by a failure, which is precisely what round 1 was about, resurfacing through
-   * the one state value the fix never wrote.
+   * Every earlier fix at this site latched ON: over-offering, which this file's own rule calls
+   * recoverable ("over-offering is recoverable, a false receipt is not"). This one is the false
+   * receipt — the boundary consumed by a failure, the exact failure mode that rule exists to
+   * prevent, resurfacing through the one state value the fix never wrote.
    *
    * So WRITE THE VERDICT, both ways. `!orientOk` is the whole rule: the orient ran → consumed;
    * it did not → still owed, and now recorded as `true` so the pre-flag path never has to infer it

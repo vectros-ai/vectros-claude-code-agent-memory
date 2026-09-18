@@ -241,7 +241,7 @@ try {
   for (const [k, v] of savedOverrides) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
 }
 
-// ── 6. THE SLUG IS UNCHANGED — 5,779 state files on the dogfood machine are named by the old one.
+// ── 6. THE SLUG IS UNCHANGED — 5,779 state files in a real corpus are named by the old one.
 //
 // Five modules each carried their own copy of this regex before the seam. They agreed, which is the
 // only reason consolidating them is safe; this pins that agreement so the shared copy can never

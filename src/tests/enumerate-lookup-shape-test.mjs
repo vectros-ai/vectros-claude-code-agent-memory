@@ -3,7 +3,7 @@
  * The resume thread-lookup investigation, pinned down as regression coverage.
  *
  * The header comment above `fetchOrientSet` in enumerate.mjs records the finding: the "persistent
- * shape/validation 400 on {field:'threadId'}" hypothesis did NOT reproduce (verified 2026-07-22 —
+ * shape/validation 400 on {field:'threadId'}" hypothesis did NOT reproduce (verified —
  * live `list_schemas` shows `threadId` correctly lookup-indexed as exact-match; a direct live call
  * succeeded; all 71 historical "thread lookup FAILED" lines across every retained hooks.log
  * generation trace to `orient-boundary-test.mjs`'s own stub server, not production).

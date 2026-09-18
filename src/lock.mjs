@@ -102,13 +102,13 @@ export function isHeld(lock, sessionId, { staleMs = STALE_MS, tag = 'capture' } 
  * fail-open, since a lock we cannot write must not kill capture — and that same true then
  * authorized `unlinkSync` on the spawn-failure path, releasing a lock this process never took.
  *
- * ⚠️ THE JUSTIFICATION IS UNSETTLED. Do not write a confident sentence here — two people already
- * did, in both directions, and neither had measured the thing they were arguing about.
+ * ⚠️ THE JUSTIFICATION IS UNSETTLED. Do not write a confident sentence here — this has already
+ * been argued in both directions, by parties who had not measured the thing they were arguing about.
  *
- * The review said a `wx` claim against a file another process holds OPEN can raise EPERM/EBUSY
- * rather than EEXIST, making a LIVE worker's lock the branch's likeliest occupant. I "refuted" it
- * with a blanket claim that anything existing raises EEXIST, cited a test as proof, and hardened it
- * into a golden doc. **The test contained no such measurement** — `claim()` writes via
+ * One claim: a `wx` claim against a file another process holds OPEN can raise EPERM/EBUSY
+ * rather than EEXIST, making a LIVE worker's lock the branch's likeliest occupant. A counter-claim
+ * held that anything existing raises EEXIST regardless, backed by a test cited as proof and
+ * hardened into a golden doc. **The test contained no such measurement** — `claim()` writes via
  * `writeFileSync`, which opens AND closes, so no handle was ever held and no second process existed.
  * It measured a closed file in one process: the case nobody disputed.
  *

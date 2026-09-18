@@ -2,7 +2,7 @@
  * HERMETIC RUNTIME ROOT for the suite. Import this FIRST in any test that touches runtime state.
  *
  * WHY IT EXISTS — a real failure, not a precaution. `orient-boundary-test.mjs` case 2c asserts that
- * an empty pinned tier plus an empty store injects NOTHING. It failed on the author's machine with
+ * an empty pinned tier plus an empty store injects NOTHING. It failed on a real development machine with
  * `ctx was 3689c`, and the 3689 characters were real: `nudge.mjs`'s cross-session orphan block had
  * found a genuine orphaned queue belonging to a genuine OTHER session, sitting in the single shared
  * `~/.claude/vectros-memory/queue/` that no test could point away from. The test was correct, the
@@ -13,8 +13,8 @@
  * Two consequences beyond that one case:
  *   · Any test that writes `WORKERS_OFF` was writing the operator's real kill switch, and removing
  *     it in teardown re-enabled workers whether or not the operator had turned them off.
- *   · The reaper DELETES from `state/`. It cannot be exercised against a directory holding the
- *     author's 5,779 live state files.
+ *   · The reaper DELETES from `state/`. It cannot be exercised against a directory holding a real
+ *     operator's 5,779 live state files.
  *
  * HOW. `paths.mjs` derives every path from `VECTROS_MEMORY_HOME` through FUNCTIONS resolved per
  * call, not module constants — so setting the variable here, in an import that evaluates before the
@@ -61,7 +61,7 @@ if (!process.env.VECTROS_MEMORY_HOME?.trim()) {
    * Credentials are deliberately NOT isolated (the `*-real-test.mjs` files need the real ones), and
    * `capture-worker` now ends every run with an unconditional `drainAll`. Those two facts together
    * mean a suite run that leaves an owed spool entry behind and then spawns the worker would POST
-   * candidate records to the OWNER'S REAL STORE with the owner's real key. Today it is latent only
+   * candidate records to a REAL STORE with a real credential. Today it is latent only
    * because two test files happen to clean up and happen to sort in a helpful order — one rename
    * away from firing, and `run-all.mjs --all` drives a real distiller that genuinely spools.
    *
@@ -83,8 +83,7 @@ if (!process.env.VECTROS_MEMORY_HOME?.trim()) {
     'written by tests/isolate.mjs — no test may settle/reopen/supersede a candidate against the real store\n');
 
   /**
-   * ⚠ MEMORY.md IS NOT UNDER THE ROOT, AND THIS IS THE HOLE THAT MATTERED MOST (review finding,
-   * 2026-07-29).
+   * ⚠ MEMORY.md IS NOT UNDER THE ROOT, AND THIS IS THE HOLE THAT MATTERED MOST.
    *
    * `VECTROS_MEMORY_HOME` relocates everything `paths.mjs` derives — but `project.mjs` writes the
    * PINNED BLOCK into `~/.claude/projects/<repo-slug>/memory/MEMORY.md`, which hangs off
@@ -122,7 +121,7 @@ if (!process.env.VECTROS_MEMORY_HOME?.trim()) {
  * suite-shared `ISOLATED_ROOT` above holds every sibling test file's own fixtures too).
  *
  * REPEATS the two structural safety markers above (`SPOOL_OFF`, `VERDICT_MUTATIONS_OFF`) into the
- * NEW root — found missing by review, 2026-08-17: several test files were moving
+ * NEW root — found missing: several test files were moving
  * `VECTROS_MEMORY_HOME` to their own `fs.mkdtempSync` root by hand, AFTER this module's own import
  * had already written those markers into the FIRST (shared) root. The new root inherited neither
  * marker, so the structural gate against a real network write was silently absent for every one of

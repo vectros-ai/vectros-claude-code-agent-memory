@@ -23,7 +23,7 @@ privateRoot('dispose-prefix-test');
 
 // Case 5 below settles a real candidate against the fake server — the default structural gate
 // `privateRoot()` just re-stamped into the new root has to come off for that write to land (same
-// opt-out as dispose-test.mjs/orphan-cap-worker-test.mjs; found missing here by review, 2026-08-17
+// opt-out as dispose-test.mjs/orphan-cap-worker-test.mjs; found missing here
 // — this file's settle was passing only because the OLD private-root code never carried the
 // marker at all, not because this was an intentional, structural opt-in).
 try { fs.unlinkSync(verdictMutationsOffFile()); } catch { /* fine — not there yet */ }
@@ -31,7 +31,7 @@ try { fs.unlinkSync(verdictMutationsOffFile()); } catch { /* fine — not there 
 const DIR = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const DISPOSE = path.join(DIR, 'dispose.mjs');
 const server = await startFakeRecordsServer();
-const ENV = { ...process.env, VECTROS_API_KEY: 'ssk_test_fake_for_dispose_prefix_test', VECTROS_API_BASE_URL: server.url };
+const ENV = { ...process.env, VECTROS_API_KEY: 'ssk_test_invalid_for_dispose_prefix_test', VECTROS_API_BASE_URL: server.url };
 
 function spawnAsync(argv) {
   return new Promise((resolve) => {
@@ -117,7 +117,7 @@ const SID5 = randomUUID();
 
 console.log('\n=== 6. a GENUINE 8-char-exactly full id, with its own local file, resolves as literal ===');
 {
-  // The boundary case a review panel caught: at exactly SID_DISPLAY_LEN characters, a real full id
+  // The boundary case: at exactly SID_DISPLAY_LEN characters, a real full id
   // and a truncated prefix are indistinguishable by length alone. This confirms the fix — when its
   // own file is the ONLY candidate that matches, a real short id resolves cleanly, exactly as the
   // old exact-match code always did, never as an ambiguous prefix. (Case 9 below covers what
@@ -165,7 +165,7 @@ const SID8 = randomUUID();
 
 console.log('\n=== 9. a LITERAL short id colliding with a longer sibling\'s prefix refuses, never silently picks the literal ===');
 {
-  // The real bug an independent review caught, 2026-08-17: an earlier version checked "does a
+  // The real bug: an earlier version checked "does a
   // local file exist for the literal input?" FIRST and returned it immediately, without ever
   // checking whether that same literal input could ALSO be a truncated prefix of some other,
   // longer session's id sitting in the same queue directory. Two candidates for one input is

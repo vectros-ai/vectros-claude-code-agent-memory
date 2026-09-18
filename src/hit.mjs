@@ -1,5 +1,6 @@
 /**
- * Search-hit → injected line. SHARED by recall.mjs (R1/orient) and recall-eval-worker.mjs (R2).
+ * Search-hit → injected line. SHARED by recall.mjs (prompt-time recall/orient) and
+ * recall-eval-worker.mjs (mid-run recall).
  *
  * It used to live as a byte-for-byte copy in both ("Same reshape as recall.mjs — see its
  * comment"), which is a drift bug waiting to happen: every fix here had to be made twice, and the
@@ -14,9 +15,8 @@
  * MEASURED FAILURE (a real session, the reason this file exists): a highly relevant decision doc
  * was surfaced mid-task at the exact right moment, went UNREAD, and the session re-derived its
  * content from source code instead. The loop worked end-to-end and still changed nothing, because
- * the payload could not compete with a comment already sitting in the code. The session's own
- * words: "the title plus one truncated line told me the doc existed but gave nothing that would
- * make me open it."
+ * the payload could not compete with a comment already sitting in the code. The title plus one
+ * truncated line proved the doc existed but gave no reason to open it.
  *
  * The budget it was spent on, per that hit:
  *     label  = `0042-some-internal-decision.md`   <- metadata.title is the FILENAME
@@ -41,13 +41,14 @@
  */
 
 /**
- * The authority clause every injection carries. Shared so R1/orient/R2 cannot drift apart.
+ * The authority clause every injection carries. Shared so prompt-time recall, orient, and
+ * mid-run recall cannot drift apart.
  *
  * It used to read, flatly: "Treat a hit as authoritative over re-derivation." That is RIGHT for
- * *has this been decided* and WRONG for *does this behave* — and the difference bit us. From a
- * real session: "the loop's own recall told me to trust it over re-derivation, and here
- * re-deriving from code was correct and necessary. The doc said the design was decided; only the
- * code and the tests could say it works."
+ * *has this been decided* and WRONG for *does this behave* — and the difference showed up in a
+ * real session: recall's own authority clause argued for trusting it over re-derivation, but
+ * re-deriving from code there was correct and necessary. The doc said the design was decided; only
+ * the code and the tests could say it works.
  *
  * Both halves matter. Drop the authority and we are back to recall-as-suggestion, which this rule
  * exists to overrule — a real hit DID correctly outrank re-derivation on a separate, earlier case.

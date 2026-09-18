@@ -221,7 +221,7 @@ console.log('\n=== orphanedPending: ONLY stale AND flushed sessions are handed t
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
-console.log('\n=== M3: ONE dead queue must reach ONE live agent, not every idle one ===');
+console.log('\n=== ONE dead queue must reach ONE live agent, not every idle one ===');
 {
   /**
    * THE INVARIANT THIS SUBSYSTEM ASSERTS THREE TIMES — "two agents settling one queue is how a
@@ -297,25 +297,25 @@ console.log('\n=== planClaimRenewals: who gets stamped this turn (the two shippe
   const plan = (o) => planClaimRenewals({ nowMs: NOWM, renewEveryMs: R, ...o });
   const sids = (p) => p.map((x) => x.sid).sort().join(',');
 
-  // R1(a): a holder with candidates of its own still renews. The old code stopped scanning the
+  // Case 1a: a holder with candidates of its own still renews. The old code stopped scanning the
   // moment `ownPending > 0`, and a session working a foreign queue is exactly one producing
   // candidates — so the queue it was mid-verification on reopened at the TTL.
   eq('a held queue is renewed even with no pick (own work in progress)',
     sids(plan({ orphans: [q('X', 'me', T)], pick: null, delivered: false, sessionId: 'me' })), 'X');
 
-  // R1(b): renewal is not limited to the head of the list. `orphanedPending` sorts most-pending-
+  // Case 1b: renewal is not limited to the head of the list. `orphanedPending` sorts most-pending-
   // first, so a bigger orphan appearing later silently displaced the one actually held.
   eq('EVERY held queue is renewed, not just the first',
     sids(plan({ orphans: [q('BIG', 'me', T), q('MINE', 'me', T)], pick: q('BIG', 'me', T), delivered: true, sessionId: 'me' })),
     'BIG,MINE');
 
-  // R2: no identity ⇒ no claim at all. Under the shared fallback id every such session computed
+  // Case 2: no identity ⇒ no claim at all. Under the shared fallback id every such session computed
   // "I already hold this" and renewed, so the claim never expired while any of them ran.
   eq('a session with no id claims NOTHING (never renews a shared fallback claim)',
     plan({ orphans: [q('X', 'nosession', T)], pick: q('X', 'nosession', T), delivered: true, sessionId: null }).length, 0);
   eq('...and a blank id is the same case', plan({ orphans: [q('X', '  ', T)], sessionId: '  ' }).length, 0);
 
-  // R3: the throttle. Renewal fires per PROMPT; unthrottled it grows a foreign queue by a line per
+  // Case 3: the throttle. Renewal fires per PROMPT; unthrottled it grows a foreign queue by a line per
   // prompt indefinitely, and renewal is what prevents the hold from ever ending.
   eq('a recently-stamped claim is NOT re-stamped', plan({ orphans: [q('X', 'me', 60_000)], sessionId: 'me' }).length, 0);
   eq('a claim older than a quarter-TTL IS re-stamped', sids(plan({ orphans: [q('X', 'me', R + 1000)], sessionId: 'me' })), 'X');
@@ -388,9 +388,9 @@ console.log('\n=== the orphan nudge block: capped, and honest about the cap ==='
    * This check previously read `/NOT YOUR SESSION|no memory of/i` — an alternation that ACCEPTED
    * the phrase the block opened with, "THIS IS NOT YOUR SESSION'S WORK". That sentence granted
    * permission to defer, in the first clause, and the test would have preserved it through any
-   * rewrite. OBSERVED over the first four hours of real sweeps (an owner report, not an instrumented
-   * measurement — the measured figures elsewhere in this tree cite their conditions): every settlement on this machine
-   * happened because the owner argued for it; left alone, agents deferred. A test that pins the
+   * rewrite. OBSERVED over real sweeps (a qualitative report, not an instrumented
+   * measurement — the measured figures elsewhere in this tree cite their conditions): every settlement
+   * happened only when that case was argued explicitly; left alone, agents deferred. A test that pins the
    * words is worth little, but a test that pins the LICENCE is worth exactly what it costs.
    */
   check('it does NOT tell the reader this is not their work (the licence to defer)',
@@ -402,7 +402,7 @@ console.log('\n=== the orphan nudge block: capped, and honest about the cap ==='
   check('it keeps leaving-it-pending an explicitly CORRECT outcome',
     /DISCRETIONARY/.test(text) && /LEAVE IT PENDING/.test(text), text.slice(-400));
   /**
-   * THE BLOCK MUST NOT PROMISE A RETURN IT CANNOT DELIVER — a cold review caught this one, and it
+   * THE BLOCK MUST NOT PROMISE A RETURN IT CANNOT DELIVER — this comment used to, and it
    * was FALSE IN BOTH DIRECTIONS. `orphanSig` keys on the pending SET (nudge.mjs), recall commits it
    * on delivery and re-renders only when the signature CHANGES, so a reader who settles nothing
    * never sees the queue again this session; meanwhile `planClaimRenewals` keeps the claim fresh, so
@@ -564,7 +564,7 @@ console.log('\n=== runSweep — THE FUNCTION THAT SPENDS MONEY (was untested; 3 
   }
 }
 
-console.log('\n=== M2: the steady-state "no flush" receipt must name the RIGHT cause ===');
+console.log('\n=== the steady-state "no flush" receipt must name the RIGHT cause ===');
 {
   /**
    * Once the backlog drains, `skipSwept` drops every stale session BEFORE `selectFlushable` can

@@ -2,19 +2,20 @@
 /**
  * THE ORIENT BOUNDARY — `orientPending` must survive an orientation that never arrived.
  *
- * This is the THIRD round of ONE bug, and the shape is worth more than the fix:
+ * This ONE bug has been fixed here three times already, and the shape is worth more than any one
+ * fix:
  *
- *   round 1 — the flag was consumed on ENTRY. A network blip produced `hits=[]` and
- *             `orientLines=[]`, fell into the nothing-to-inject guard (whose body is `writeState`),
- *             and persisted `orientPending: false`. The session ran its whole life with no pinned
- *             set. Fixed by moving the clear to the delivery site.
- *   round 2 — "on delivery" was read as "we reached the delivery code". But the guard at recall.mjs
- *             only returns when hits AND orientLines AND nudge are ALL empty — so enumeration
- *             failing (`orientLines=[]`) while search SUCCEEDS (`hits>0`) walks straight past it to
- *             the clear. Zero orientation delivered, boundary consumed, never re-owed.
- *   round 3 — the comment above the line said "A failed orient leaves the flag set, so the next
- *             healthy prompt orients". The code said `if (isFirstPrompt) state.orientPending =
- *             false`. The comment described the fix; the line never got it.
+ *   - the flag was consumed on ENTRY. A network blip produced `hits=[]` and
+ *     `orientLines=[]`, fell into the nothing-to-inject guard (whose body is `writeState`),
+ *     and persisted `orientPending: false`. The session ran its whole life with no pinned
+ *     set. Fixed by moving the clear to the delivery site.
+ *   - "on delivery" was read as "we reached the delivery code". But the guard at recall.mjs
+ *     only returns when hits AND orientLines AND nudge are ALL empty — so enumeration
+ *     failing (`orientLines=[]`) while search SUCCEEDS (`hits>0`) walks straight past it to
+ *     the clear. Zero orientation delivered, boundary consumed, never re-owed.
+ *   - the comment above the line said "A failed orient leaves the flag set, so the next
+ *     healthy prompt orients". The code said `if (isFirstPrompt) state.orientPending =
+ *     false`. The comment described the fix; the line never got it.
  *
  * The rule was already written 4 lines above the bug, for the enumerated ids:
  * *"over-offering is recoverable, a false receipt is not"* — and `orientPending: false` with no
@@ -22,7 +23,7 @@
  *
  * WHY A STUB API AND NOT A FIXTURE. The failure needs enumeration to fail while search succeeds,
  * which is a split no fixture can express honestly — feeding `recall.mjs` a pre-baked orientLines=[]
- * would validate my assumption, not the contract (a real-graph validation, not a paraphrase). So this stands up a real HTTP server, points
+ * would validate an assumption about the split, not the contract (a real-graph validation, not a paraphrase). So this stands up a real HTTP server, points
  * the real `recall.mjs` at it with `VECTROS_API_BASE_URL`, and lets the unmodified hook run its own
  * fetch path in its own process. The stub is the API; the code under test is untouched.
  */
@@ -118,7 +119,7 @@ const runRecall = (base) => new Promise((resolve) => {
     catch { /* no state written; the assertions surface it */ }
     // 'Session orientation' is the first-prompt HITS header — it ships whether or not the
     // enumeration produced anything, so it cannot tell the two apart (it fooled the first draft of
-    // this test). Since 2026-07-17 the PINNED set is no longer injected (it lives in the auto-loaded
+    // this test). The PINNED set is no longer injected (it lives in the auto-loaded
     // MEMORY.md; enumerate.mjs § renderOrientBlock), so the only thing the orient block still injects
     // is the resumed thread — 'This thread's earlier working memory'. That is the marker that
     // observes an injected orient block; `injectedPin` separately proves the pinned set is ABSENT
@@ -213,8 +214,8 @@ eq('the healthy path consumes the boundary', r.state.orientPending, false);
 // 2b. THE EMPTY TIER — HTTP 200 {data:[]}. The orient RAN and had nothing to say.
 //
 // This is the case the first three missed, and it is the one that matters most: it is the
-// state of EVERY NEW USER and every OSS adopter, and never of the machine this was written
-// on — which has pinned records, so the dogfood could not surface it. Case 1 covers 500,
+// state of EVERY NEW USER and every OSS adopter, and never of a machine with pinned records
+// already, which could not surface it. Case 1 covers 500,
 // case 2 covers one record, case 3 covers both-fail; none covers SUCCESS-WITH-NOTHING.
 //
 // With the round-3 gate (`orientPart.length && !orientDropped`) the flag never cleared, so
@@ -238,19 +239,20 @@ eq('an EMPTY tier consumes the boundary — the orient ran, and owed nothing',
   r.state.orientPending, false);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 2c. THE NEW USER, EXACTLY — empty tier AND an empty store. FOURTH ROUND of one bug.
+// 2c. THE NEW USER, EXACTLY — empty tier AND an empty store. ANOTHER instance of the same bug.
 //
 // 2b stubs a search HIT so the nothing-to-inject path is not taken, and says so in its own
 // precondition. That precondition is honest, and what it honestly documents is the avoidance:
 // every case above walks the delivery path. A brand-new user has BOTH an empty pinned tier and an
 // empty store, so nothing is injected at all — and the guard that used to sit on that path
 // returned before the flag was ever decided. The orient RAN. It owed nothing. The flag latched
-// anyway, for the life of the session, for exactly the population the round-4 fix names and for
+// anyway, for the life of the session, for exactly the population this fix targets and for
 // nobody on this machine.
 //
-// Round 1 the same guard persisted `false` (consumed a boundary never delivered); round 4 it
-// persisted `true` (never consumed one that was). Same guard, opposite direction, both bugs — the
-// reason the fix is structural (ONE commit site, output decided after) and not a fifth predicate.
+// One earlier fix left the same guard persisting `false` (consumed a boundary never delivered);
+// this one left it persisting `true` (never consumed one that was). Same guard, opposite direction,
+// both bugs — the reason the fix is structural (ONE commit site, output decided after) and not one
+// more predicate layered on top.
 //
 // This case and case 3 are the DISCRIMINATING PAIR: identical nothing-to-inject path, opposite
 // `orientOk`, opposite verdicts. Together they prove the flag now follows the receipt and not the
@@ -406,11 +408,11 @@ eq('THE BUG: a failed orient on the PRE-FLAG path must RE-OWE, not evaporate',
   r.state.orientPending, true);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 3. Total failure: both fail -> nothing injected -> flag STILL survives (round 1's bug, still
-//    fixed). Same path as 2c, opposite receipt: this is the half that proves the fall-through did
-//    not simply clear the flag unconditionally.
+// 3. Total failure: both fail -> nothing injected -> flag STILL survives (the earlier consumed-
+//    on-entry bug, still fixed). Same path as 2c, opposite receipt: this is the half that proves
+//    the fall-through did not simply clear the flag unconditionally.
 // ─────────────────────────────────────────────────────────────────────────────
-console.log('\n=== 3. both fail -> nothing injected -> orientPending survives (round 1 regression) ===');
+console.log('\n=== 3. both fail -> nothing injected -> orientPending survives (no regression) ===');
 reset(); seedPending();
 r = await withStub(() => ({ status: 500, body: { error: 'stub: everything is down' } }), runRecall);
 check('no crash', !r.crash, r.crash);

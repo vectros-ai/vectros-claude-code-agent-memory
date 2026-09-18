@@ -2,8 +2,8 @@
 /**
  * THE REAPER — prune `state/` and `queue/`, and refuse loudly rather than delete quietly.
  *
- * WHY IT EXISTS. Both directories grow monotonically and nothing prunes them. Re-measured on the
- * dogfood machine 2026-07-29 (the issue's own figures were nine days old and had more than doubled):
+ * WHY IT EXISTS. Both directories grow monotonically and nothing prunes them. Re-measured
+ * (the issue's own figures were stale and had more than doubled):
  *
  *   state/ ...... 5,779 files, 0.8 MB, in a corpus 15.7 days old   -> ~368/day, unbounded
  *   queue/ ......    58 files, 694 KB — 12 with pending, 46 settled
@@ -71,7 +71,7 @@ import {
  * `VECTROS_MEMORY_HOME` only if it happened to be set before this module was first imported, which
  * is a property of file order rather than intent. It shipped as a const, which meant a test that
  * reached `reap.mjs` before `isolate.mjs` would stamp the marker into the OPERATOR'S real runtime
- * while reading everything else from the temp root. (Review finding, 2026-07-29.)
+ * while reading everything else from the temp root.
  */
 export const REAP_MARKER = () => inMemoryHome('last-reaped');
 
@@ -102,7 +102,7 @@ export function classifyState(f, now, opts = {}) {
    * 2. PENDING CANDIDATES ARE IMMORTAL. Checked before age, deliberately.
    *
    * `state !== 'ok'` IS PART OF THE SAME GUARD, and leaving it out falsified the refusal this
-   * module advertises as absolute (review finding, 2026-07-29). `queue.read()` returns
+   * module advertises as absolute. `queue.read()` returns
    * `pending: []` for BOTH a genuinely settled queue and one it could not read — `empty('corrupt')`
    * carries an empty pending list. So a transient EACCES/EBUSY on the queue file (an AV scanner,
    * EMFILE under concurrent hooks — the cases queue.mjs enumerates) coinciding with a reap made
@@ -130,8 +130,8 @@ export function classifyState(f, now, opts = {}) {
    *    why keying on its recency alone would leave 94% of the corpus untouched forever.
    *
    * ⚠ AGE IS THE **NEWER** OF `lastStopAt` AND mtime, AND THAT IS NOT BELT-AND-BRACES — reading
-   * `lastStopAt` alone deleted live sessions (review finding, 2026-07-29, CONFIRMED against the
-   * code).
+   * `lastStopAt` alone deleted live sessions — confirmed against the
+   * code.
    *
    * `lastStopAt` is NOT a liveness clock during a resume. It freezes at the previous session's
    * final turn and stays frozen until the resumed session reaches its own first Stop. Meanwhile
@@ -180,7 +180,7 @@ export function classifyQueue(q, now, opts = {}) {
   const keep = (why) => ({ sid: q.sid, action: 'keep', why, bytes: q.size });
 
   /**
-   * ANYTHING THAT IS NOT `ok`, not merely `corrupt` (review finding, 2026-07-29).
+   * ANYTHING THAT IS NOT `ok`, not merely `corrupt`.
    *
    * `queue.read()` reports `corrupt` when it could not READ the file, and its own header explains
    * that answering 0 for the offset there is catastrophic; the same logic forbids deleting it.
@@ -199,8 +199,8 @@ export function classifyQueue(q, now, opts = {}) {
     return keep(`handed ${Math.round((now - q.handedAt) / 60_000)}m ago — a live session may be settling it`);
   }
   /**
-   * `Math.max`, NOT `??` — and this is the SAME defect round 1 fixed on the state side, still live
-   * over here where the loss is worse (PM cold pass, 2026-07-30, CONFIRMED).
+   * `Math.max`, NOT `??` — this is the SAME defect already fixed on the state side, still live
+   * over here where the loss is worse.
    *
    * `??` means a PRESENT `lastEventAt` masks the mtime entirely. And `lastEventAt` folds only
    * `swept`/`handed`: a `captured` append — the watermark, the most frequent event a live queue
@@ -229,7 +229,7 @@ const days = (ms) => Math.round(ms / 86_400_000);
 /**
  * `lastStopAt` as epoch ms, or null if the session never reached a Stop.
  *
- * A BARE `typeof === 'number'` WAS A TRAPDOOR, not a type check (review finding, 2026-07-29). Any
+ * A BARE `typeof === 'number'` WAS A TRAPDOOR, not a type check. Any
  * other representation — most obviously an ISO string, which is exactly what `orientedAt` two
  * fields over already is — failed the test and SILENTLY demoted the session from the 30-day real
  * window to the 7-day phantom one. Nothing errors; the protection just quietly shortens to a
@@ -269,7 +269,7 @@ export function planReap({ states, queues, spools = [], now, ...opts }) {
   ];
   const prunable = decisions.filter((d) => d.action === 'prune');
   /**
-   * INTERLEAVED, so the cap cannot STARVE one kind (review finding, 2026-07-29).
+   * INTERLEAVED, so the cap cannot STARVE one kind.
    *
    * A flat `prunable.slice(0, max)` over `[...states, ...queues]` takes states first, always.
    * With ~5,450 prunable phantoms against a 500/run cap and ~368 arriving per day, the net drain
@@ -364,7 +364,7 @@ export function collect({ stateD = stateDir(), queueD = queueDir(), spoolD = spo
     if (!st) continue;
     const q = readQueue(sid);
     /**
-     * THE NEWEST event, not the first non-null one (review finding, 2026-07-29).
+     * THE NEWEST event, not the first non-null one.
      *
      * This was `q.sweptAt ?? q.handedAt ?? null`, which is a PRECEDENCE order dressed as a
      * recency one: a queue swept 100 days ago and handed to a live session three hours ago
@@ -439,7 +439,7 @@ export function applyReap(plan, { stateD = stateDir(), queueD = queueDir(), spoo
   const aborted = [];
   for (const d of plan.prune) {
     /**
-     * RE-CHECK THE QUEUE IMMEDIATELY BEFORE UNLINKING IT (review finding, 2026-07-29).
+     * RE-CHECK THE QUEUE IMMEDIATELY BEFORE UNLINKING IT.
      *
      * `collect()` -> `planReap()` -> `applyReap()` are three passes over a directory that every
      * other live session is writing to, and the scan spans a `readdirSync` plus a read+fold of
@@ -477,8 +477,8 @@ export function applyReap(plan, { stateD = stateDir(), queueD = queueDir(), spoo
     /**
      * SLUGGED **and** rooted in the caller's directories — both halves, and the second was missing.
      *
-     * Round 1 fixed the slug asymmetry by routing through `stateFor`/`queueFor`, which slug
-     * correctly and resolve against the PROCESS-GLOBAL root. That silently broke the `stateD`/
+     * Fixing the slug asymmetry by routing through `stateFor`/`queueFor` (which slug
+     * correctly and resolve against the PROCESS-GLOBAL root) silently broke the `stateD`/
      * `queueD` parameters: they stayed in the signature, defaulted, and were then read by nothing.
      * So `applyReap(plan, { stateD: '/tmp/probe/state' })` — the alternate-listing run this
      * module's own shape advertises — planned against the probe and UNLINKED THE SAME-NAMED FILES
@@ -487,7 +487,6 @@ export function applyReap(plan, { stateD = stateDir(), queueD = queueDir(), spoo
      * That is verbatim the reader/deleter asymmetry the comment one paragraph up warns about,
      * reintroduced by the fix for it, in the only function here that deletes. `reap-test.mjs` never
      * passed either parameter, so the seam had no coverage at all.
-     * (PM cold pass, 2026-07-30, CONFIRMED.)
      */
     // A LOOKUP, not a ternary chain. The two-kind ternary silently routed anything that was not
     // `state` into `queueD` — so a third kind would have deleted a spool-named file out of the
@@ -539,7 +538,7 @@ export function reapReceipt(plan, applied) {
 /**
  * THE OFF SWITCH. Returns true when the reaper must not run at all.
  *
- * WHY IT EXISTS (PM cold pass, 2026-07-30). Round 1 decoupled the reaper from `WORKERS_OFF` for a
+ * WHY IT EXISTS. An earlier pass decoupled the reaper from `WORKERS_OFF` for a
  * good reason — that switch is documented as the kill switch for billed INFERENCE, and the reaper
  * spawns none, so an operator stopping spend should not silently stop pruning. But decoupling left
  * the only IRREVERSIBLE component here with no off switch, while a comment in `capture.mjs` asserted
@@ -627,8 +626,8 @@ export function runReap({ now = Date.now(), apply = true, force = false, ...opts
 // inconsistency: an operator running this by hand is inspecting, and the one irreversible action in
 // this tree should not be what happens when you type its name to see what it does.
 //
-// FOUND LIVE, against the real deployed build, not source (verified 2026-08-14 during the actual
-// cutover — `run-all.mjs` never catches this, it only ever imports src/ directly): this used to be
+// FOUND LIVE, against the real deployed build, not source (verified during a
+// deployment cutover — `run-all.mjs` never catches this, it only ever imports src/ directly): this used to be
 // `import.meta.url === pathToFileURL(process.argv[1]).href`, an `import.meta.url` self-identity
 // check. `capture.mjs` imports `runReap` from this file, and — despite `bundle: false` — the
 // build INLINES this file's entire source into `capture.mjs`'s own dist output (tsup.config.mjs's

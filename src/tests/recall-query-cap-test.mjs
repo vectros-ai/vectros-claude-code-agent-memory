@@ -61,7 +61,7 @@ console.log('=== 1. clampQuery(): the single-sourced bound ===');
     `${Buffer.byteLength(worstBodyAscii, 'utf8')}B >= ${REQUEST_SIZE_CAP_BYTES}B`);
 
   /**
-   * THE BYTE-SAFETY-NET RED-PROOF (review finding, 2026-07-22). A char-only cap is FALSE
+   * THE BYTE-SAFETY-NET RED-PROOF. A char-only cap is FALSE
    * ADVERTISING against a byte-count limit: MEASURED, `RECALL_QUERY_MAX_CHARS` (4000) of
    * CJK text is only 4000 UTF-16 code units but ~12000 UTF-8 bytes — the char clamp alone passes
    * this straight through, and the composed body would 413 exactly like the bug this fix exists to
@@ -136,7 +136,7 @@ console.log('\n=== 1b. clampQuery(): strips harness-tag markup without corruptin
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 1c. THE INJECTION-SHAPE RED-PROOF — the residual the harness-tag-stripping fix above left open.
-// A prior dogfood measurement found a query carrying path-traversal, SSRF-literal, or
+// A measurement found a query carrying path-traversal, SSRF-literal, or
 // SQL-comment-idiom shapes trips the WAF's CRS content rules on `/v1/search` exactly like tag
 // markup did — this section proves clampQuery now neutralizes all three, and (just as
 // importantly) does NOT corrupt the legitimate content that same measurement named as
@@ -221,7 +221,7 @@ console.log('\n=== 1c. clampQuery(): neutralizes path-traversal / SSRF-literal /
 // unmodified hook makes real requests against it, the body is what gets asserted).
 // ═══════════════════════════════════════════════════════════════════════════
 /**
- * `bodies` carries `{url, body}` pairs, not bare body text — as of 2026-08-14 (B2), recall.mjs's
+ * `bodies` carries `{url, body}` pairs, not bare body text — recall.mjs's
  * own-session nudge ALSO calls the store (`candidates.mjs`'s `addressablePending`, a `POST
  * /v1/records/lookup`) on every steady-state prompt, alongside `/v1/search`. A bare-body capture
  * that assumed every request was a search body crashed on the new one (`parsed.query` undefined —

@@ -52,7 +52,7 @@ const GLOBALS = new Set(['NaN', 'Infinity', 'JSON', 'Math', 'Date', 'Promise', '
  * THE CENSUS IS UPPER_SNAKE ONLY, AND THAT IS A KNOWN HOLE — do not read a green run here as "no
  * unresolvable identifiers in this tree."
  *
- * MEASURED 2026-07-20: `sweep.mjs` shipped `const _isHeld = d.isHeld || isHeld;` with `isHeld` never
+ * Measured: `sweep.mjs` shipped `const _isHeld = d.isHeld || isHeld;` with `isHeld` never
  * imported. `runSweep` threw ReferenceError on every real Stop — the sweep was dead in production —
  * and this lint did not see it, because `isHeld` is camelCase. A second instance of this file's own
  * founding bug, landing just outside its scope.

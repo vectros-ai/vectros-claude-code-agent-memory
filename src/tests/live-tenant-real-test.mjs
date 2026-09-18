@@ -140,7 +140,7 @@ async function runLiveRoundTrip() {
   // silently reintroducing the very thing this file exists to bypass.
   delete ENV.VECTROS_KEYRING_ALIAS;
   /**
-   * ⚠ MUST ALSO CLEAR VECTROS_MEMORY_HOME — found in review, not by a test. When this file is run
+   * ⚠ MUST ALSO CLEAR VECTROS_MEMORY_HOME — not caught by a test. When this file is run
    * the DOCUMENTED way (`npm test -- --all`, i.e. as a child of run-all.mjs), it inherits
    * run-all.mjs's OWN isolate.mjs call: an isolated VECTROS_MEMORY_HOME + a VERDICT_MUTATIONS_OFF
    * marker written into it, specifically so every OTHER test in the suite can't settle/reopen
@@ -216,7 +216,7 @@ async function runLiveRoundTrip() {
   }
 
   // NOT unconditional — a prior version of this line printed regardless of outcome, which read as
-  // a false all-clear on exactly the runs where settling had actually failed (found in review).
+  // a false all-clear on exactly the runs where settling had actually failed.
   console.log(settledOnRecord
     ? `\n(live tenant: alias='${ALIAS}', session='${SID}' — this run's own record is now settled and harmless to leave)`
     : `\n(live tenant: alias='${ALIAS}', session='${SID}' — settling did NOT confirm above; this probe may still be pending in the test tenant)`);

@@ -24,7 +24,7 @@
  *                               owns its storage directly rather than delegating.
  *
  * WHY CLAUDE_CODE_OAUTH_TOKEN stays OUT of settings.json / a session-wide env var: set
- * session-wide it would also be picked up by the owner's NORMAL Claude Code sessions — and a
+ * session-wide it would also be picked up by a developer's NORMAL Claude Code sessions — and a
  * `setup-token` credential is INFERENCE-SCOPED ONLY (it can't establish Remote Control sessions),
  * so a stray global would silently DEGRADE the primary tool's auth. The token is needed by
  * exactly one thing: the `claude -p` child the capture/recall-eval workers spawn. So it stays out
@@ -43,6 +43,7 @@ import { readJsonSafe } from './atomic.mjs';
 import { hlog } from './hooklog.mjs';
 import { credentialsFile, workersOffFile } from './paths.mjs';
 import { CREDS_HELPER_TIMEOUT_MS, CREDS_HELPER_MAX_BUFFER, CREDS_DETAIL_MAX_CHARS } from './config.mjs';
+import { validateApiBaseUrl } from './base-url.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -258,7 +259,7 @@ export function resolveActiveKeyringAlias() {
 /**
  * Is `secret` shaped like a TEST-tenant credential? Exported alongside `TEST_KEY_RE` itself so a
  * caller outside this module (`cli.mjs`'s `pinKeyringAlias`) can apply the SAME shape check
- * `warnIfTestKeyOnce` uses at hook-run time, at PIN time instead — found in review: the original
+ * `warnIfTestKeyOnce` uses at hook-run time, at PIN time instead: the original
  * pin logic happily durable-pins whatever is active with no regard for its shape, which means an
  * operator who runs `init` in the narrow window right after an unrelated `vectros bootstrap
  * --tenant test` (structurally the SAME mistake this whole fallback tier exists to stop happening
@@ -411,9 +412,22 @@ export function cred(name) {
     return key;
   }
   const env = process.env[name];
-  if (env) return env;
+  if (env) {
+    // VECTROS_API_BASE_URL determines where every call site below attaches the live
+    // ssk_*/sk_* bearer (and, on the prompt-firing hooks, the developer's own prompt
+    // text) — validate it at THIS one boundary rather than at each of the six call
+    // sites, so a future seventh site inherits the guard for free. Fails open: an
+    // invalid/untrusted override falls through to '', which every caller already
+    // turns into the safe default (`|| 'https://api.vectros.ai'`) — see base-url.mjs.
+    if (name === 'VECTROS_API_BASE_URL') return validateApiBaseUrl(env) || '';
+    return env;
+  }
   if (name === 'CLAUDE_CODE_OAUTH_TOKEN') return resolveOAuthToken();
-  return loadCredsFile()[name] || ''; // VECTROS_API_BASE_URL, ANTHROPIC_API_KEY — unchanged, file-backed
+  if (name === 'VECTROS_API_BASE_URL') {
+    const fromFile = loadCredsFile()[name] || '';
+    return fromFile ? validateApiBaseUrl(fromFile) || '' : '';
+  }
+  return loadCredsFile()[name] || ''; // ANTHROPIC_API_KEY — unchanged, file-backed
 }
 
 /**

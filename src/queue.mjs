@@ -150,7 +150,7 @@ export function read(sessionId) {
    * WHICH disposition, not just whether one happened — `disposed`/`superseded` above answer "is it
    * gone", which is all the fold needed until now. `report.mjs --compare` needs the actual value to
    * check it against the record corpus's own `disposition` field (the settle-side dual-write gap
-   * closed 2026-08-14), and re-reading the file per candidate the way `dispose.mjs`'s local
+   * now closed), and re-reading the file per candidate the way `dispose.mjs`'s local
    * `lastDisposition()` does would make that an O(n²) scan across a session's full queue on every
    * `--compare` run. One extra Map, same single pass, same pattern as `disposed`/`superseded`.
    */

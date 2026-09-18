@@ -3,6 +3,71 @@
 All notable changes to `@vectros-ai/claude-code-agent-memory` are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.13.1 — 2026-09-17
+
+Pre-1.0 / beta.
+
+### Security
+
+- **`VECTROS_API_BASE_URL` was never validated, and it determines where every hook fetch attaches
+  the live `ssk_*`/`sk_*` bearer — and, on the prompt-firing hooks, the developer's own prompt
+  text.** An attacker-influenced value (the env var, or the plaintext `credentials.json` fallback
+  tier this name also reads from) could redirect `recall.mjs`, `candidates.mjs`, `dispose.mjs`,
+  `enumerate.mjs`, `project.mjs`, and `recall-eval-worker.mjs` to an arbitrary host with no scheme
+  constraint and no warning. `cred('VECTROS_API_BASE_URL')` now validates at that one boundary
+  (mirroring the same guard already shipped in `@vectros-ai/cli` and `@vectros-ai/mcp-server`):
+  `https://` (or `http://` to a loopback host) to an official `vectros.ai`/`*.vectros.ai` host, with
+  a loud `VECTROS_ALLOW_INSECURE_BASE_URL=1` opt-out for a trusted local proxy. Consistent with this
+  package's fail-open design, a refused value never throws — it resolves to `''`, which every call
+  site already turns into the real default (`https://api.vectros.ai`).
+
+### Fixed
+
+- **The README's description of `propose()` never stated that it transmits data automatically.**
+  It correctly said a captured candidate is never written into your *searchable* knowledge base
+  without disposition — that claim was already true and is unchanged — but it never said that
+  distilling a candidate also **immediately POSTs it to your Vectros store** as an unreviewed
+  `candidate` record, before any review happens. A reader could reasonably take "you decide,
+  always" to mean nothing leaves the machine until then. The README now states the automatic POST
+  plainly, in the same bullet, and names what it actually contains — title, body, category,
+  session id, and (when the distiller found one) a suggested destination, an area tag, free-text
+  tags, or a cited file/doc reference — rather than a partial list that would itself misstate the
+  payload. The existing, accurate distinction between "transmitted" and "recallable" is kept, not replaced
+  with a broader warning. The same bullet also now states plainly that nothing filters this content
+  for sensitivity before it transmits — a candidate can echo a secret or other sensitive transcript
+  content verbatim; closing that gap is tracked as its own follow-up, out of scope here.
+- **Internal review-process vocabulary, published in this package's shipped `src/`, `dist/`, and
+  sourcemaps.** Comments naming this project's own internal review stages, and one runtime string
+  literal (a tunable's `note:` field — actual program output, not a strippable comment), reached
+  users on three channels: the GitHub source mirror (ships `src/` verbatim), the npm `dist/` build
+  (a near-passthrough, `bundle: false`/no `minify`), and every sourcemap whose `sourcesContent`
+  embeds the original source. The originally-reported count was 31 hits across 17 files; sweeping
+  by category (every phrasing variant of the same internal terminology, not just the instances
+  named) found more — 31 files in total. Reworded every instance found (comments only, one runtime
+  string) to describe the same finding generically; none of it changes behavior. Re-verified
+  against a rebuilt `dist/` and its sourcemaps, not source alone.
+- **A second, narrower category of internal framing: references naming this package's own internal
+  developer by role, and "flagship"/"dogfood" language describing this as the company's own
+  internal tool** — 63 sites across 34 files in `src/` and `src/tests/`. Each rewording kept the
+  substantive technical rationale (a measurement, a root cause, a design constraint) and dropped
+  only the internal framing/attribution/date wrapper around it — no behavioral change. Five test
+  fixtures also used a fake API key shape (`sk_test_smoke0000...`) that isn't distinguishable by
+  the published scrub gate's allowlisted "obviously fake" convention; renamed to that convention
+  (`sk_test_invalid_...`).
+- Removed remaining dated, first-person and development-process narration, and references to
+  non-shipped internal tooling, from source comments; technical rationale retained. 65 files in
+  `src/`, `src/tests/`, and the build config. A small number of user-visible/test-output strings
+  were reworded to the same standard, not just comments: two `report.mjs` console.log lines,
+  three `config.mjs` tunable `note:` values (surfaced wherever config defaults are reported), and
+  three test-assertion label strings (`dispose-test.mjs`, `nudge-test.mjs`, `config-test.mjs`) —
+  none change what the code does, only what it prints or labels.
+
+- **Two more source comments named a sibling package by monorepo-relative path**
+  (`base-url.mjs`'s doc comment describing that the same guard is ported into two sibling
+  packages' CLI/MCP server; `tests/run-all.mjs`'s note on a sibling package's keyring-lock
+  behavior) — found by a post-merge audit. Reworded to describe the siblings generically; no
+  behavioral change.
+
 ## 0.13.0 — 2026-09-07
 
 Pre-1.0 / beta.

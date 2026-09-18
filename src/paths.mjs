@@ -108,7 +108,7 @@ export const reapOffFile = () => inMemoryHome('REAP_OFF');
 export const orphanCapOffFile = () => inMemoryHome('ORPHAN_CAP_OFF');
 /**
  * "Do not promote spooled proposals to records here." A FILE, matching `REAP_OFF`/`WORKERS_OFF`,
- * because a hook is a fresh process and a new write path on the owner's live loop needs an
+ * because a hook is a fresh process and a new write path on the live loop needs an
  * off-switch that does not require a redeploy to reach.
  *
  * It also closes a live hazard in the TEST HARNESS. `capture-worker` now ends every run with an
@@ -121,8 +121,8 @@ export const orphanCapOffFile = () => inMemoryHome('ORPHAN_CAP_OFF');
 export const spoolOffFile = () => inMemoryHome('SPOOL_OFF');
 /**
  * "Do not settle, reopen, or supersede a candidate here." `SPOOL_OFF`'s sibling for the OTHER path
- * that reaches the live store with the owner's real key — `candidates.mjs`'s `settle`/`reopen`/
- * `markSuperseded` had no equivalent gate (a real review finding, closed here):
+ * that reaches the live store with a real credential — `candidates.mjs`'s `settle`/`reopen`/
+ * `markSuperseded` had no equivalent gate (a real gap, closed here):
  * they call the store directly and relied entirely on every test remembering to inject its own
  * transport, the exact "incidentally safe, not structurally safe" shape `SPOOL_OFF` exists to
  * replace. `isolate.mjs` writes this marker for the same reason it writes that one.

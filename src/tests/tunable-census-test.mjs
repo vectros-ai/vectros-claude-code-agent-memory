@@ -6,7 +6,7 @@
  * the source, a `const` in a hook file is **unreachable to an adopter** — there is no
  * supported way for them to change it at all. So the cost of one missed extraction is not untidy
  * code, it is a knob that becomes un-turnable at publish and whose later extraction is a change to
- * a public config surface (the owner's 2026-07-20 ruling: doing it after publication is materially
+ * a public config surface (doing it after publication is materially
  * more expensive than before).
  *
  * The census started at 42 across 13 files. A number that large was never going to be held by
@@ -207,7 +207,7 @@ console.log('\n=== 5. tunables() exposes exactly SPEC\'s keys, and the NAMED exp
  * annotated: `resolveConfig` assigns `values[key]` for every SPEC key on both branches, so it could
  * not fail by construction. It was kept once with a comment saying so, which is worse than deleting
  * it — a reader counts it as coverage, and an assertion that cannot fail is noise on the one file
- * whose job is to be believable. (PM cold pass, 2026-07-30.)
+ * whose job is to be believable.
  *
  * What replaces it is reachability, which CAN fail: every SPEC key must be readable by a consumer,
  * as a named export or — for the in-cycle modules — via `tunables()`. A key that is settable and

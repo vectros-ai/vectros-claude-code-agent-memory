@@ -229,7 +229,7 @@ export async function flush(sessionId, opts = {}) {
      * the same bytes will be refused forever. An environment failure (no key, auth, rate-limited,
      * schema absent, unreachable) applies identically to every remaining entry, so there is nothing
      * to learn by trying them: HALT the batch and leave everything owed. The next Stop retries for
-     * free. `rate-limited` (429) joined this list after a review found it falling through to
+     * free. `rate-limited` (429) joined this list after it was found falling through to
      * `rejected` — the same bytes succeed once the window resets, so charging it risked parking
      * real candidates permanently under a busy drain.
      */

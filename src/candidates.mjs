@@ -40,8 +40,8 @@ import { cred } from './creds.mjs';
 import { hlog } from './hooklog.mjs';
 import { candidateSchemaGapFile, verdictMutationsOffFile } from './paths.mjs';
 import { CANDIDATE_TIMEOUT_MS, CANDIDATE_PAGE_LIMIT, CANDIDATE_MAX_PAGES, CANDIDATE_SCHEMA_RECHECK_MS } from './config.mjs';
-// Imported from queue.mjs (and re-exported) rather than re-declared here — a review agent caught
-// that this file used to define its OWN `new Set(['stored','documented','ignored'])`,
+// Imported from queue.mjs (and re-exported) rather than re-declared here — this file used to
+// define its OWN `new Set(['stored','documented','ignored'])`,
 // independently of queue.mjs's identical set. The two happened to agree, but nothing enforced it:
 // a disposition value added to one without the other would let `dispose.mjs`'s CLI validation (via
 // queue.mjs's set) silently diverge from `settle()`'s validation here against the actual record
@@ -270,7 +270,7 @@ function normalise(rec) {
     ref: field(rec, 'ref') ?? null,
     resolved: field(rec, 'resolved') ?? null,
     origin: field(rec, 'origin') ?? null,
-    // WRITTEN BY `reopen` AND, UNTIL 2026-08-01, NEVER READ BACK. Verified against staging: the
+    // WRITTEN BY `reopen` AND, UNTIL RECENTLY, NEVER READ BACK. Verified against staging: the
     // platform stores it fine; this projection just did not list it, so the audit trail for undoing
     // a verdict was write-only and every consumer read `undefined` with no error anywhere. That is
     // the failure mode of a hand-maintained projection — see the census test in candidates-test.
@@ -388,11 +388,11 @@ export async function propose(sessionId, c, opts = {}) {
  */
 /**
  * Is a VERDICT MUTATION switched off here? `SPOOL_OFF`'s sibling for the other path that reaches
- * the live store with the owner's real key. `settle`/`reopen`/`markSuperseded` (every caller of
+ * the live store with a real credential. `settle`/`reopen`/`markSuperseded` (every caller of
  * `patch()`, which is why the gate lives here and not duplicated three times) had no equivalent —
  * they relied entirely on every test remembering to inject its own transport, the exact
  * "incidentally safe, not structurally safe" shape `SPOOL_OFF` exists to replace elsewhere in this
- * tree (a real review finding, closed here).
+ * tree (a real gap, closed here).
  */
 function verdictMutationsDisabled() {
   if (process.env.VECTROS_MEM_VERDICT_MUTATIONS_OFF === '1') return 'VECTROS_MEM_VERDICT_MUTATIONS_OFF';
@@ -469,7 +469,7 @@ export async function reopen(id, why, opts = {}) {
  * until now, NOTHING wrote the matching record's `disposition` — `settle()`/`reopen()` above were
  * fully built and tested and had zero production callers. A candidate settled via the file queue
  * stayed `disposition: 'pending'` in the record corpus forever, so any reader trusting records
- * would show it as still open indefinitely. Found by an owner review, 2026-08-14, of exactly the
+ * would show it as still open indefinitely. Surfaced by exactly the
  * question this file's own `pendingForSession` comment poses ("when reads flip to records...").
  */
 export async function settleByExternalId(externalId, disposition, verdict = {}, opts = {}) {
@@ -694,7 +694,7 @@ export async function proposedBetween(from, to, opts = {}) {
 
 /**
  * ONE session's pending candidates, with STABLE addresses — what `dispose.mjs` and the live nudge
- * both need as of 2026-08-14 (B2, the full flip to records-driven addressing).
+ * both need since the full flip to records-driven addressing.
  *
  * Built on `bySession`, deliberately NOT `pendingForSession`. `pendingForSession`'s own header
  * already warns why: its ordinals are assigned over the UNSETTLED SUBSET, which shrinks as

@@ -36,10 +36,9 @@ function freshHome() {
  * credentials) and this test file inherits that via `...process.env`. `set-token`'s file-fallback
  * write path uses `credentialsFile()`, which honours that env var — so without this line, a red-
  * test sabotaging the keychain write forces the file-fallback branch to write a FAKE test token
- * straight into the REAL, LIVE credentials file. This happened during authoring: a sabotage
- * run clobbered the real `CLAUDE_CODE_OAUTH_TOKEN` on the dogfood machine with a test placeholder,
+ * straight into the REAL, LIVE credentials file, overwriting a real `CLAUDE_CODE_OAUTH_TOKEN`
  * unrecoverably (`writeFileAtomic` renames a temp file directly over the target — no backup is
- * kept). Recovered by re-running `claude setup-token`. Every case gets its OWN throwaway
+ * kept; recovery requires re-running `claude setup-token`). Every case gets its OWN throwaway
  * credentials file, inside its own fresh `memoryHome`, so no case can ever reach the real one.
  */
 function cleanEnv(memoryHome) {
@@ -80,11 +79,11 @@ console.log('=== 1. empty stdin is refused ===');
  * `OAUTH_ACCOUNT` in creds.mjs are fixed, machine-wide constants — the exact entry a real
  * deployment's real CLAUDE_CODE_OAUTH_TOKEN lives in, not something `freshHome()` scopes.
  *
- * The first incident: an earlier draft's red-test sabotage clobbered the real, live
- * `credentials.json` (file tier) because `cleanEnv()` didn't strip `VECTROS_HOOK_CREDENTIALS` —
- * fixed above. A second incident, found LATER: even with that fixed, a plain non-sabotage
- * `npm test` run on a dogfood machine that had since migrated a real token into the KEYCHAIN
- * tier silently deleted it via this file's own `finally` cleanup, which unconditionally called
+ * Two real failure modes fixed here. First: a red-test sabotage run can clobber the real, live
+ * `credentials.json` (file tier) if `cleanEnv()` doesn't strip `VECTROS_HOOK_CREDENTIALS` —
+ * fixed above. Second: even with that fixed, a plain non-sabotage
+ * `npm test` run can silently delete a real token already migrated into the KEYCHAIN
+ * tier, via this file's own `finally` cleanup, which unconditionally called
  * `removeOAuthToken()` with no regard for what was there before. Same root cause both times —
  * test code assuming it owns a resource it doesn't — different storage layer each time.
  *
@@ -152,7 +151,7 @@ if (!optedIn) {
       eq('cred() reads back the SECOND value only', readCred(home), 'sk-ant-oat01-second-value');
     } finally {
       // ALWAYS runs, even on an assertion failure above — RESTORE, never just delete. This is a
-      // REAL, machine-wide credential store entry; incident #2 was exactly this step done wrong.
+      // REAL, machine-wide credential store entry; a prior version of this cleanup got exactly this step wrong.
       if (preExisting != null) {
         storeOAuthToken(preExisting);
         eq('cleanup: the pre-existing entry was restored, not lost', _peekOAuthTokenRaw(), preExisting);

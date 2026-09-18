@@ -1,5 +1,5 @@
 // RED-PROOF: orphan-cap-worker.mjs, the WRITE half of the orphan-cap backstop. Spawned as a real subprocess
-// against a fake records server — same shape as backfill-test.mjs/dispose-test.mjs, same reason
+// against a fake records server — same shape as dispose-test.mjs, same reason
 // (spawnSync deadlocks against a same-process stub server; a subprocess has no way to receive an
 // injected fetchImpl from its parent test).
 import fs from 'node:fs';
@@ -16,18 +16,18 @@ import { ORPHAN_CAP_MARKER } from '../orphan-cap.mjs';
 import { startFakeRecordsServer } from './fake-records-server.mjs';
 
 /**
- * A PRIVATE ROOT FOR THIS FILE, distinct from the shared suite-wide isolate.mjs root (review
- * finding, 2026-08-14, CONFIRMED: this file's own worker acts on the WHOLE corpus, so §4/§9's
+ * A PRIVATE ROOT FOR THIS FILE, distinct from the shared suite-wide isolate.mjs root: this file's
+ * own worker acts on the WHOLE corpus, so §4/§9's
  * "nothing to settle" / "untouched" assertions broke under `run-all.mjs`, where sibling test files
  * sharing the one isolated root leave their OWN breaching fixtures behind — capture-orphan-cap-
  * test.mjs's off-switch/not-due cases deliberately never settle theirs). Uses `isolate.mjs`'s own
- * `privateRoot()` rather than a hand-rolled `mkdtempSync` (review, 2026-08-17: the hand-rolled form
+ * `privateRoot()` rather than a hand-rolled `mkdtempSync` (the hand-rolled form
  * left the new root without `SPOOL_OFF`/`VERDICT_MUTATIONS_OFF`, so the structural gate against a
  * real network write was silently absent — safe only by accident, not by construction).
  */
 privateRoot('orphan-cap-worker-test');
 
-// Same opt-out as backfill-test.mjs/dispose-test.mjs — this file's only store is the fake server.
+// Same opt-out as dispose-test.mjs — this file's only store is the fake server.
 // MUST come after privateRoot() above — it re-stamps this marker into the new root, so unlinking
 // it has to target the root that is actually current by the time dispose.mjs/the worker runs.
 try { fs.unlinkSync(verdictMutationsOffFile()); } catch { /* fine — not there yet */ }
@@ -46,7 +46,7 @@ function logSize() { try { return fs.statSync(LOG).size; } catch { return 0; } }
 
 const DIR = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const server = await startFakeRecordsServer();
-const ENV = { ...process.env, VECTROS_API_KEY: 'ssk_test_fake_for_orphan_cap_worker_test', VECTROS_API_BASE_URL: server.url, VECTROS_MEM_ORPHAN_CAP_DAYS: '7' };
+const ENV = { ...process.env, VECTROS_API_KEY: 'ssk_test_invalid_for_orphan_cap_worker_test', VECTROS_API_BASE_URL: server.url, VECTROS_MEM_ORPHAN_CAP_DAYS: '7' };
 
 function spawnAsync(argv, opts) {
   return new Promise((resolve) => {
@@ -139,9 +139,10 @@ function seedFileStaleRecordSettled(sid, title, days, disposition) {
   return externalId;
 }
 
-/** Seed a pending file candidate whose externalId matches NO record at all — distinct from
- * `writeoff.mjs`'s population (zero records for the WHOLE session): here the session has OTHER
- * real records (so orphan-cap.mjs legitimately finds it breaching), just not this one candidate. */
+/** Seed a pending file candidate whose externalId matches NO record at all — distinct from a
+ * separate internal migration tool's population (zero records for the WHOLE session): here the
+ * session has OTHER real records (so orphan-cap.mjs legitimately finds it breaching), just not this
+ * one candidate. */
 function seedRecordless(sid, title, days) {
   const externalId = `${sid}:${randomUUID()}-no-record`;
   append(sid, { op: 'propose', externalId, title, body: 'b', kind: 'observation', dest: 'memory' });
@@ -251,8 +252,8 @@ const X5 = seedFileStaleRecordSettled(SID5, 'a human genuinely disposed this —
 console.log('\n=== 8. a pending file candidate with NO matching record is skipped as missing, not crashed on ===');
 const SID6 = randomUUID();
 // SID6 needs at least one REAL record so orphan-cap.mjs's own machinery has something to work
-// with beyond this recordless one — this is deliberately NOT the writeoff.mjs population
-// (zero records for the whole session); it is one recordless straggler in an otherwise
+// with beyond this recordless one — this is deliberately NOT the separate internal migration
+// tool's population (zero records for the whole session); it is one recordless straggler in an otherwise
 // record-backed, genuinely breaching session.
 const X6real = seedBreaching(SID6, 'a real sibling candidate in the same session', SEVEN_DAYS);
 const X6missing = seedRecordless(SID6, 'proposed to the file, never made it into records', SEVEN_DAYS);
@@ -263,9 +264,8 @@ const X6missing = seedRecordless(SID6, 'proposed to the file, never made it into
   eq('the real sibling still settles normally', recordDisposition(X6real), 'ignored');
   const q = readQueue(SID6);
   // The recordless one has no record to settle, so it is reported `missing` and left pending in
-  // the file — it is not this worker's population (that's writeoff.mjs's per-candidate reach,
-  // covered in tools/tests/writeoff-test.mjs), only that this worker must not crash or mis-skip
-  // its real sibling because of it.
+  // the file — it is not this worker's population (that's a separate internal tool's per-candidate
+  // reach), only that this worker must not crash or mis-skip its real sibling because of it.
   check('the recordless candidate is still pending in the file (untouched, not crashed on)',
     q.pending.some((c) => c.externalId === X6missing), JSON.stringify(q.pending));
 }
@@ -275,7 +275,7 @@ const SID7 = randomUUID();
 const X7 = seedBreaching(SID7, 'would settle, but records is unreachable this run', SEVEN_DAYS);
 {
   resetDebounceMarker();
-  // Same technique writeoff-test.mjs uses: port 1 is reserved and nothing binds it, so this is a
+  // Same technique a sibling test in this suite uses: port 1 is reserved and nothing binds it, so this is a
   // genuine network failure (ECONNREFUSED), not a defeated-credential-fallback false positive.
   const r = await run({ env: { ...ENV, VECTROS_API_BASE_URL: 'http://127.0.0.1:1' } });
   check('worker exits 0 (unreachable is reported, not fatal)', r.status === 0, r.stdout + r.stderr);

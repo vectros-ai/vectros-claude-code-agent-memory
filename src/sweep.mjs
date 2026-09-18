@@ -6,7 +6,7 @@
  * usable (`SessionEnd` fires ~2/min with `reason=other`; `PreCompact` reads the FILE, so a compact
  * takes nothing from it). So the final residual of EVERY session — up to ~100K of its newest text —
  * was distilled by nothing, ever. That is the END of the arc: the conclusions, the retractions, and
- * the wrap-up where learnings are articulated. MEASURED 2026-07-20: 617K orphaned across 9 done
+ * the wrap-up where learnings are articulated. Measured: 617K orphaned across 9 done
  * sessions.
  *
  * WHAT THIS IS. A sweep over OTHER sessions' queues, run on a Stop we were going to get anyway.
@@ -68,8 +68,8 @@ const WORKER = path.join(HERE, 'capture-worker.mjs');
  * A FUNCTION, matching `reap.mjs`'s `REAP_MARKER` and `paths.mjs`'s own stated rule. It was an
  * import-time snapshot, which honours `VECTROS_MEMORY_HOME` only if the variable happened to be set
  * before this module was first imported — a property of file order rather than intent, and exactly
- * what `paths.mjs`'s header condemns. (PM cold pass, 2026-07-30: the rule was violated in six
- * modules; the census could not see it because it hunts the literal `homedir()` pattern, not a
+ * what `paths.mjs`'s header condemns. (The rule was violated in six
+ * modules; a census hunting the literal `homedir()` pattern could not see it, since this is not a
  * snapshot of the accessor.)
  */
 export const SWEEP_MARKER = () => sweepMarker();
@@ -104,7 +104,7 @@ export const SWEEP_MARKER = () => sweepMarker();
  * THE `stat` SEAM IS THERE SO THE FAIL-OPEN BRANCH CAN BE TESTED AT ALL, and the reason is worth
  * recording because the first draft got it wrong. The test tried to produce an unreadable marker by
  * pointing at a DIRECTORY — but `statSync` on a directory SUCCEEDS and returns a usable mtime, so
- * the check was asserting a premise that does not hold. MEASURED on this machine (Windows 11, Node
+ * the check was asserting a premise that does not hold. MEASURED on a Windows 11 dev machine (Node
  * via node:fs): a directory stats fine; a file used as a path component gives ENOENT (the quiet
  * branch); the only non-ENOENT throw reachable from `node:fs` is a NUL-byte path, which is a
  * synthetic `TypeError`, not an operator's failure.
@@ -323,10 +323,10 @@ export function orphanedPending(nowMs, { staleMs, stateDir, queueDir, forSid = n
    *
    * The right fix is not a faster scan, it is the right INDEX. This function's question is "who has
    * UNSETTLED CANDIDATES?", and a candidate lives in a queue file. A session with no queue file
-   * cannot have one — no filtering required, it simply is not in the population. MEASURED on this
-   * machine: **9 queue files against 2,337 state files** (measured 2026-07-19; the state dir GROWS
-   * — 2,548 on 2026-07-20, 2,816 on 2026-07-21, and unreaped until reap.mjs landed. Two different
-   * counts in this tree are two different days, not a contradiction. The RATIO is the durable fact
+   * cannot have one — no filtering required, it simply is not in the population. Measured:
+   * **9 queue files against 2,337 state files** (the state dir GROWS continuously and was
+   * unreaped until reap.mjs landed — different counts elsewhere in this tree reflect different
+   * points in that growth, not a contradiction. The RATIO is the durable fact
    * and it only widens). The state read then happens only for
    * those 9, to get `lastStopAt`.
    *
@@ -393,7 +393,7 @@ export function orphanedPending(nowMs, { staleMs, stateDir, queueDir, forSid = n
  * queue into the real runtime dir (see tests/sweep-test.mjs § end-to-end). What actually keeps that
  * fixture out of a live agent's nudge is the `pending.length` gate below, not this line. Any future
  * test seeding a UUID-shaped sid WITH pending candidates, that dies before its cleanup, would be
- * offered to a live agent as somebody's orphan. (PM cold, L1.)
+ * offered to a live agent as somebody's orphan.
  * Fail-open to an empty list WITH a receipt on `hlog` — the channel this process actually writes.
  */
 function defaultListQueues(dir = queueDir()) {
@@ -465,8 +465,8 @@ export function runSweep(currentSid, nowMs, opts = {}) {
   /**
    * INJECTABLE SEAMS — every impure thing this function does. Not decoration: `runSweep` is the
    * ONLY function in this module that spends money, and it shipped with no test because `spawn`,
-   * `claim`, `release` and `markSwept` were module-scope imports with nothing to grab. Three of the
-   * defects found in review (head-of-line blocking, the unchecked `markSwept`, the fail-open floor)
+   * `claim`, `release` and `markSwept` were module-scope imports with nothing to grab. Three defects
+   * (head-of-line blocking, the unchecked `markSwept`, the fail-open floor)
    * all lived in exactly the half that had no seam, while the pure selection function had 44
    * checks. A test that cannot reach the spending path is not a test of the spending path.
    */
@@ -550,7 +550,7 @@ export function runSweep(currentSid, nowMs, opts = {}) {
      *
      *   · NOT "the other three drops". `corrupt queue` and `total < offset` DO call `noteSkip`;
      *     `if (!s.transcriptPath) continue` (residual.mjs) does not, deliberately — it is the
-     *     phantom exclusion, ~2,500 rows when measured 2026-07-20 (it GROWS — see residual.mjs), and a receipt per phantom is noise, not
+     *     phantom exclusion, ~2,500 rows when measured (it GROWS — see residual.mjs), and a receipt per phantom is noise, not
      *     signal. It is not a blind spot: those sessions have nothing to measure BY CONSTRUCTION.
      *   · "they surface in report.mjs's blind-spot ledger" was FALSE HERE. `blindSpots` is a
      *     per-process in-memory array; the sweep runs inside the Stop hook, which exits. Nothing it

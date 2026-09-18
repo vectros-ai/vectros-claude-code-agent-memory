@@ -14,7 +14,7 @@ import { startFakeRecordsServer } from './fake-records-server.mjs';
  * THIS FILE OPTS IN TO VERDICT MUTATIONS, and it is one of the few that may.
  *
  * `isolate.mjs` writes a `VERDICT_MUTATIONS_OFF` marker into every isolated root so no test can
- * PATCH the owner's real store via `settle`/`reopen` (credentials are deliberately not isolated).
+ * PATCH the real store via `settle`/`reopen` (credentials are deliberately not isolated).
  * dispose.mjs — the CHILD PROCESS spawned below — reaches for that marker on every settle/reopen
  * call, inheriting the same isolated root via `ENV`'s `{...process.env}` spread; left in place,
  * EVERY settle in this whole suite is silently refused, which looks exactly like "the fake server
@@ -125,7 +125,7 @@ let seedCounter = 0;
  * successful settle; several cases below assert against it directly). Returns the ordinal (`cN`)
  * this candidate resolves to, exactly as `bySession`'s stable numbering would assign it — the same
  * address the OLD file-driven version of this test seeded directly, so most call sites below are
- * unchanged from before the B2 flip.
+ * unchanged from before the move to record-backed storage.
  */
 function seedCandidate(sid, { title, body = 'b', kind = 'observation', dest = 'memory', sourceRef, revises } = {}) {
   const externalId = `${sid}:seed-${++seedCounter}`;
@@ -211,7 +211,7 @@ check('c2 was NOT settled by the mixed batch', isPending(SID, 'c2'));
 console.log('\n=== 4. CORRESPONDENCE / RECENCY: an OLD, unrelated record must be REFUSED ===');
 // THIS FILE USED TO ASSERT THE OPPOSITE, and that is the point. It settled c1 — titled
 // "stored path" — with a real, unrelated, pre-existing record. Unrelated content, exit 0,
-// "expect false", called a pass. A cold panel used this very line as the proof that dispose
+// "expect false", called a pass. This very line is the proof that dispose
 // verified EXISTENCE, not CORRESPONDENCE — and a real uuid is precisely the mistake to expect,
 // because recall injects real record uuids into the agent's context on every hit. The gate now
 // checks id-echo, typeName, and recency (a stored candidate is a record you JUST wrote); an old
@@ -247,9 +247,9 @@ await run('c4=maybe', ['c4=maybe'], 1);
 console.log('\n=== 8. unknown candidate id is refused ===');
 await run('c99=ignored', ['c99=ignored'], 1);
 
-console.log('\n=== 9. `ignored:covered:<ref>` — the ONE-WAY DOOR IS NOW CHECKED (2026-07-20 incident) ===');
+console.log('\n=== 9. `ignored:covered:<ref>` — the ONE-WAY DOOR IS NOW CHECKED ===');
 /**
- * A PM session settled 29 candidates and disposed a TRUE one as `ignored:PREMISE IS FALSE`, citing
+ * A settling session disposed 29 candidates, including a TRUE one marked `ignored:PREMISE IS FALSE`, citing
  * two repo docs that were themselves STALE. `ignored` is never re-offered, so the candidate was
  * destroyed — and it was the ONLY disposition nothing verified. The undoable ones had four gates;
  * the one-way door had none.
@@ -454,8 +454,9 @@ console.log('\n=== 12. documented: CONTAINMENT — bounded to the worktree ROOT,
     check('a cwd-relative citation still verifies', rH.status === 0, `exit=${rH.status} ${outH.slice(0, 200)}`);
     /**
      * ASSERT THE RECORD, NOT STDOUT — the first version of this check read `rH.stdout` while its
-     * own name said "recorded". `resolved` is what the RECORD carries now (the primary write, as
-     * of B2); the local file backup mirrors it but is no longer the thing that matters here.
+     * own name said "recorded". `resolved` is what the RECORD carries now (the primary write since
+     * the move to record-backed storage); the local file backup mirrors it but is no longer the
+     * thing that matters here.
      */
     const recH = [...server.store.values()].find((r) => r.typeName === 'candidate' && r.payload.title === 'containment: the resolved path is PERSISTED, not just printed');
     check('the RECORD carries the resolved root-relative path', recH.payload.resolved === 'CLAUDE.md',
@@ -525,7 +526,7 @@ console.log('\n=== `resolved` is recorded on EVERY disposition path, not just `d
    * The field was tested only through `documented:`, while its specification names record ids too.
    * Each path writes a different SHAPE — a path, a record phrase, a coverage phrase — and a reader
    * of the permanent record must be able to tell which. Assert against the RECORD (the primary
-   * write, as of B2) per path rather than assuming one format.
+   * write since the move to record-backed storage) per path rather than assuming one format.
    */
   const payloadFor = (title) => [...server.store.values()]
     .find((r) => r.typeName === 'candidate' && r.payload.title === title)?.payload || {};

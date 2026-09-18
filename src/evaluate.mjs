@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * PostToolUse hook — R2 mid-run recall (agent-memory flagship dogfood).
+ * PostToolUse hook — mid-run recall.
  *
  * The user prompt is a shrinking fraction of the signal: autonomous sessions run
  * many tool-driven turns before a user speaks, and the rich content comes from the
- * agent. R1 (UserPromptSubmit) only fires on user turns, so recall must ALSO track
+ * agent. Prompt-time recall (UserPromptSubmit) only fires on user turns, so recall must ALSO track
  * the evolving thread mid-run. `PostToolUse` is the one hook that fires inside the
  * autonomous loop AND can inject `additionalContext` the model then acts on.
  *
@@ -54,21 +54,22 @@ const API_KEY = cred('VECTROS_API_KEY');
 // 300s 2.1%. The knee is ~120-180s; below it capture's fixed floor dominates.
 //
 // ⚠️ The VALUE side of this trade was wrong, and the correction matters more than the number.
-// This was set to 180s reasoning that "R2 is no longer the primary mechanism — orient recall
-// front-loads knowledge, leaving R2 a sparse drift-catcher." A live session falsified that:
+// This was set to 180s reasoning that "mid-run recall is no longer the primary mechanism —
+// orient recall front-loads knowledge, leaving it a sparse drift-catcher." A live session
+// falsified that:
 //
 //   Orient recall AND the session's hand-written kickoff BOTH missed a decision doc that
 //   governed the half of the issue that was wrong — and missed it for the SAME reason. Both
-//   keyed off the issue's framing, and the issue framed the problem as a coercion bug. R2
-//   found it, on the tool call where the session was grepping the relevant code path.
+//   keyed off the issue's framing, and the issue framed the problem as a coercion bug. Mid-run
+//   recall found it, on the tool call where the session was grepping the relevant code path.
 //
 // The asymmetry is structural, not incidental: prompt-time recall inherits the prompt's
-// framing INCLUDING ITS ERRORS. R2 keys on what you actually did, so it cannot inherit a
-// framing error it never saw. That makes R2 the half of the loop that catches the miss the
-// other half is blind to by construction — not a redundant backstop.
+// framing INCLUDING ITS ERRORS. Mid-run recall keys on what you actually did, so it cannot
+// inherit a framing error it never saw. That makes it the half of the loop that catches the
+// miss the other half is blind to by construction — not a redundant backstop.
 //
-// HELD at 180s anyway, deliberately. In that same session R2 fired, hit, and was WASTED: the
-// line pitched a filename and the session skipped it (see hit.mjs). Delivering unactionable
+// HELD at 180s anyway, deliberately. In that same session mid-run recall fired, hit, and was
+// WASTED: the line pitched a filename and the session skipped it (see hit.mjs). Delivering unactionable
 // payloads more often buys nothing. The payload is fixed now; re-tune when there is evidence
 // the richer line actually gets USED — that is the measurement that should move this number,
 // not the cost curve, which was never the binding constraint.
@@ -92,7 +93,7 @@ function readStdin() {
 function stagedPath(sessionId) { return path.join(stagedDir(), slug(sessionId) + '.json'); }
 
 /**
- * THE STATE-RESET BUG WAS STILL LIVE HERE (fixed 2026-07-16, review finding).
+ * THE STATE-RESET BUG WAS STILL LIVE HERE.
  *
  * `state.mjs` was written to be "ONE read/write path for all six hooks", and `recall.mjs` quotes
  * this exact body as the root cause it fixed. This hook never got the fix: it kept the hand-rolled
@@ -143,7 +144,7 @@ function takeStaged(sessionId) {
     };
   } catch (e) {
     /**
-     * SAY IT (this discipline, wired here — a cold a panel censused this discipline at 1 of 6 sites).
+     * SAY IT (this discipline, wired here — censused at 1 of 6 sites).
      *
      * ENOENT is the normal case — nothing staged — and stays quiet. ANYTHING ELSE is a fallback
      * that DROPS recall the worker paid two Haiku calls to find: a torn pickup (the worker writes
@@ -190,8 +191,8 @@ async function main() {
    * Build lines WITH ids; mark served only at delivery (below). Same defect as recall.mjs, and
    * strictly worse here: `takeStaged` DELETES the pickup on read and recall-eval-worker filters
    * every future search by `!served.has(r.id)`. So a hit dropped for budget was gone from the
-   * pickup, marked served, never displayed, and permanently excluded from re-staging — R2 destroyed
-   * recall it had paid Haiku twice to find. Fix the census, not the instance — the same rule was
+   * pickup, marked served, never displayed, and permanently excluded from re-staging — mid-run
+   * recall destroyed recall it had paid Haiku twice to find. Fix the census, not the instance — the same rule was
    * written for the nudge.
    */
   const served = new Set(state.injectedIds);
@@ -273,7 +274,7 @@ async function main() {
   }
 
   // NOTE: injectedIds is NOT committed here. It commits at delivery, after the budget fit below —
-  // otherwise a dropped hit is marked served and R2 can never re-stage it. This write persists only
+  // otherwise a dropped hit is marked served and mid-run recall can never re-stage it. This write persists only
   // the debounce clock (`lastEvalAt`), which is about the spawn above, not about what was shown.
   // Refuse only on UNREADABLE. This is the MOST FREQUENT hook (PostToolUse) and therefore the likeliest to catch
   // a torn write — and its defaults omit five fields, so publishing them erases the orient boundary,
@@ -319,7 +320,7 @@ async function main() {
   //
   // This is the one channel here that interrupts rather than informs, and that asymmetry is the
   // whole point: recall is FYI and gets read probabilistically; the capture nudge is a TODO and
-  // demonstrably gets acted on (2026-07-16: an agent fact-checked a candidate, corrected it, then
+  // demonstrably gets acted on (observed: an agent fact-checked a candidate, corrected it, then
   // stored it). Same agent, same session, opposite outcomes — the difference is that one asks for
   // a response. Triage emits this only when a hit shows the agent heading somewhere already
   // decided against, so it must be rare enough to stay loud.
@@ -334,7 +335,7 @@ async function main() {
     );
   }
 
-  // This preamble earns its keep: R2 is the ONLY recall that does not inherit the prompt's
+  // This preamble earns its keep: mid-run recall is the ONLY recall that does not inherit the prompt's
   // framing (see the header comment), so its hits are exactly the ones the session did not think
   // to ask for. Say that — an unexplained hit reads as noise and gets skipped. These hits are
   // also TRIAGED now: a second pass judged that they actually answer the query, rather than

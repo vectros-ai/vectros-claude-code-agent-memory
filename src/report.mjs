@@ -9,15 +9,15 @@
  *
  * WHY THIS EXISTS. Every hook here is fail-open, so silence is ambiguous by construction —
  * `hooklog.mjs` exists to make "healthy and quiet" distinguishable from "dead". But a per-line
- * trace answers "did this fire?", not "is any of this working?", and the owner's actual question
+ * trace answers "did this fire?", not "is any of this working?", and the actual question
  * ("how and when is recall firing, and is it guiding anything?") was unanswerable without hand-
  * grepping. The data was already on disk. This reads it.
  *
  * WHAT IT DELIBERATELY DOES NOT REPORT: an "influence" score. Recall's success is COUNTERFACTUAL
  * — when it works, the re-derivation that did not happen leaves no trace — so any proxy is a
- * guess wearing a number. One was built and DISPROVEN here on 2026-07-16: a lexical-overlap
+ * guess wearing a number. One was built and DISPROVEN here: a lexical-overlap
  * metric scored a document 97% "novel" while its own heading contained the phrase being matched.
- * Reporting nothing beats reporting that. What IS ground truth: an owner saying "you already know
+ * Reporting nothing beats reporting that. What IS ground truth: a user saying "you already know
  * this", and the agent's own AHA reports. Both are human-generated and neither is in this file.
  *
  * Read-only over state/queue/log — it never mutates them and never throws. (The RESIDUAL pass
@@ -117,7 +117,7 @@ export async function compareSession(sid, opts = {}) {
   const inCorpus = new Map(rows.filter((r) => r.externalId).map((r) => [r.externalId, digestOf(r)]));
   /**
    * externalId -> the RECORD's own `disposition` — the settle-side half of the agreement check
-   * (2026-08-14, the day `dispose.mjs` was found to have zero record writes on the settle path:
+   * (`dispose.mjs` was found to have had zero record writes on the settle path:
    * `settle()`/`reopen()` existed, tested, unwired). The propose-side check above (content
    * digest) was Phase A's whole exit criterion; it has nothing to say about whether a SETTLED
    * candidate's disposition ever reached the record it was written to agree with in the first
@@ -196,7 +196,7 @@ async function compare() {
   console.log(`  PARKED (lost)            : ${sum('parked', true)}   <- should be 0`);
   console.log(`  never spooled            : ${sum('unspooled', true)}   <- should be 0`);
   console.log(`  content MISMATCH (row exists, claim differs): ${sum('divergent', true)}   <- should be 0`);
-  console.log(`  SETTLE MISMATCH (file/record disposition disagree): ${sum('settleDivergent', true)}   <- should be 0 (dispose.mjs's record-side write, added 2026-08-14)`);
+  console.log(`  SETTLE MISMATCH (file/record disposition disagree): ${sum('settleDivergent', true)}   <- should be 0 (dispose.mjs's record-side write)`);
   console.log(`  records with no queue row: ${orphanTotal}   <- should be 0`);
   console.log(`  proposed BEFORE dual-write: ${sum('preCutover')}   <- out of scope; covered by a later backfill`);
 
@@ -500,7 +500,7 @@ async function main() {
   console.log('  Not measured, by choice. Recall\'s success is counterfactual: when it works, the');
   console.log('  re-derivation that did not happen leaves no trace. Every cheap proxy is a guess');
   console.log('  wearing a number (a lexical one was built and disproven here). Ground truth is');
-  console.log('  the owner saying "you already know this", and the agent\'s own AHA reports.');
+  console.log('  a user confirming "you already know this", and the agent\'s own AHA reports.');
   console.log('\n  Run --sessions for per-session detail, --served for what surfaces.');
 
   // LAST, and loud when non-empty: what this report could not read. Every number above is
@@ -513,15 +513,17 @@ async function main() {
 
 // Run as a CLI, but stay importable: tests import `residualFor`/`isStale` as pure functions, and
 // `main()` reads the whole log + spawns a full report — it must NOT fire on import. This file IS
-// imported for real (by `backfill.mjs`), which is exactly the case this guard exists to handle —
-// and exactly where the ORIGINAL `import.meta.url` version of it silently failed.
+// imported for real (`tests/report-fold-queues-test.mjs` imports `foldQueues`,
+// `tests/compare-test.mjs` imports `compareSession`), which is exactly the case this guard exists
+// to handle — and exactly where the ORIGINAL `import.meta.url` version of it silently failed:
+// without this guard, `main()` fired during those test runs.
 //
-// FOUND LIVE, against the real deployed build (2026-08-14, same root cause as reap.mjs's own fix,
-// found the same day): despite `bundle: false`, the build INLINES this file's entire source into
-// every file that imports from it — `backfill.mjs`'s dist output carries a full copy of this
+// FOUND LIVE, against the real deployed build (same root cause as reap.mjs's own fix): despite
+// `bundle: false`, the build INLINES this file's entire source into
+// every file that imports from it — an importer's dist output carries a full copy of this
 // module, `// src/report.mjs` marker and all, not a real `import`. Once inlined, `import.meta.url`
-// for this code IS `backfill.mjs`'s own URL, so `main()` fired on every real `backfill.mjs`
-// invocation — confirmed live: a full stats report printed ahead of backfill's own output on every
+// for this code IS the importer's own URL, so `main()` fired on every real invocation of it —
+// confirmed live: a full stats report printed ahead of that importer's own output on every
 // run. `process.argv[1]`'s BASENAME survives inlining correctly (it reflects what script node was
 // actually told to run, which bundling can't change), so that is the real entry-point check.
 if (process.argv[1] && path.basename(process.argv[1]) === 'report.mjs') await main();

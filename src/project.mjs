@@ -1,7 +1,7 @@
 /**
  * MEMORY.md projection — materialize the pinned set into the harness's auto-loaded index.
  *
- * WHY (the refinement that fell out of dogfooding):
+ * WHY:
  * File memory and Vectros memory have OPPOSITE cost asymmetries.
  *   - MEMORY.md: read is FREE + instant (the harness auto-loads it every session), but the
  *     write is expensive, manual, and unreliable — it needs housekeeping discipline, which is
@@ -12,7 +12,7 @@
  * truth; MEMORY.md becomes a GENERATED VIEW of it.** Writes stay involuntary; reads stay free.
  *
  * This also bounds the file BY CONSTRUCTION — top-N by priority, regenerated, never accreting.
- * (The un-projected MEMORY.md hit its 24KB read limit mid-dogfood. A cache can't rot that way.)
+ * (The un-projected MEMORY.md hit its 24KB read limit in practice. A cache can't rot that way.)
  *
  * PRIORITY's real jobs, now separated: (1) rank within recall, (2) order enumeration, and
  * (3) decide what materializes here. Only (3) is about "always-load" — and the harness, not a
@@ -206,7 +206,7 @@ export async function refreshPinnedBlock() {
   }
 
   if (next === file) return 'noop: already current';
-  // tmp+rename was right in principle and wrong twice in practice (fixed 2026-07-16):
+  // tmp+rename was right in principle and wrong twice in practice:
   //   1. the temp name was SHARED (`MEMORY_INDEX + '.tmp'`), not pid-scoped. MEMORY.md is a
   //      cross-session file and each session's projection runs on its own debounce clock, so two
   //      sessions could interleave into the same scratch file and rename the wreckage over the
@@ -232,7 +232,7 @@ export async function refreshPinnedBlock() {
 // that never happened look identical. Detaching a component means it needs its receipt MORE, not
 // less.
 //
-// FOUND (PM cold pass, this MR): a THIRD, different entry-point idiom lived here —
+// A THIRD, different entry-point idiom lived here —
 // `process.argv[1].endsWith('project.mjs')` — safe today only because nothing imports this file's
 // top-level scope, so it never got a chance to fire spuriously the way reap.mjs's/report.mjs's
 // `import.meta.url` checks did. `.endsWith()` also has its own narrow false-positive risk a bare

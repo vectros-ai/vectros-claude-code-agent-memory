@@ -2,7 +2,7 @@
 // hook's read-modify-write, even hooks whose `readState` defaults don't mention it. That holds only
 // because readJsonSafe merges `{...defaults, ...parsedFile}` — defaults UNDER the file. This project's
 // worst bug (promptCount 37->9) was a state reset, so this invariant is worth a RED-provable lock,
-// not just a comment. (Cold-panel test-adequacy finding, 2026-07-17.)
+// not just a comment.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

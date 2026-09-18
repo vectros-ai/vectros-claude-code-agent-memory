@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Capture worker (detached) — agent-memory flagship dogfood.
+ * Capture worker (detached).
  *
  * Spawned fire-and-forget by capture.mjs at a Stop/PreCompact boundary. Distills the
  * session transcript tail into candidate PRIVATE `memory` records via local `claude -p`
@@ -79,7 +79,7 @@ const CLAUDE_BIN =
     : 'claude');
 
 /**
- * The window is the DELTA since the last capture — not a tail (revised 2026-07-16).
+ * The window is the DELTA since the last capture — not a tail.
  *
  * It was `TRANSCRIPT_TAIL_CHARS = 12_000` + `TRANSCRIPT_TAIL_MSGS = 60`: a keyhole onto the most
  * recent turns, re-opened every 90 seconds. Measured consequences on one real session:
@@ -91,7 +91,7 @@ const CLAUDE_BIN =
  * Reading `[fromOffset, to)` instead means every character is distilled exactly ONCE per session:
  * linear cost, 100% coverage, no exceptions.
  *
- * THE CAP IS A WINDOW, NOT A CLIFF (fixed 2026-07-16). A cap is unavoidable — Haiku's context is
+ * THE CAP IS A WINDOW, NOT A CLIFF. A cap is unavoidable — Haiku's context is
  * ~200K tokens and 400K chars is ~100K of them, about half, leaving room for the system prompt, the
  * priors block and the output. The BUG was what happened when it bound: the window kept the most
  * recent 400K and the worker then marked the WHOLE delta captured, so the head fell below the
@@ -109,7 +109,7 @@ const CLAUDE_BIN =
  * become the next chunk's priors — so a later chunk REVISEs an earlier chunk's wrong claim exactly
  * as a later run revises an earlier one. Draining 1983K costs ~5 Haiku calls ONCE.
  *
- * (The cost figure here read "~$0.14" and was NOTIONAL stated as measured — cold panel: 1983K
+ * (The cost figure here read "~$0.14" and was NOTIONAL stated as measured. 1983K
  * chars is ~496K input tokens, so ~$0.50 at Haiku list, and the distiller runs on the
  * SUBSCRIPTION token, so the marginal dollar cost is neither number. The call COUNT is what the
  * argument rests on and it holds.)
@@ -131,8 +131,8 @@ const CLAUDE_BIN =
  * amnesiac: it re-meets the same material and proposes a fresh variation, which is how the
  * dry-run produced 349 proposals across 7 sessions with near-duplicates and no self-correction.
  *
- * Concretely: on 2026-07-16 a run proposed a FABRICATED statistic ("~9/min") as durable fact
- * three hours before the session retracted it. A later run reading the retraction in its delta
+ * Concretely: a run once proposed a FABRICATED statistic ("~9/min") as durable fact
+ * hours before the session retracted it. A later run reading the retraction in its delta
  * AND this list can emit {"op":"REVISE","revises":"c7"} instead of a fourth variant — the field's
  * answer to contradiction (Zep's t_invalid, Copilot's corrected-memory), not a fifth proposal.
  */
@@ -177,9 +177,9 @@ function distill(deltaText, pendingBlock) {
       'Skill,ToolSearch,Monitor,SendMessage,TaskCreate,TaskUpdate,TaskOutput,TaskStop,TaskList,' +
       'TaskGet,EnterWorktree,ExitWorktree,EnterPlanMode,Artifact,Workflow,CronCreate,CronList,' +
       'CronDelete,RemoteTrigger,PushNotification,ListMcpResourcesTool,ReadMcpResourceTool',
-    // One judgment turn, never an agentic loop. MEASURED 2026-07-14: without this this very
-    // call ran num_turns:5, CONTINUED the transcript's work instead of distilling it, and
-    // burned 135K context / ~$0.05. See the <transcript> delimiting below.
+    // One judgment turn, never an agentic loop. Without this, the call runs num_turns:5,
+    // CONTINUES the transcript's work instead of distilling it, and burns 135K context / ~$0.05.
+    // See the <transcript> delimiting below.
     '--max-turns', '1',
   ];
   const res = spawnSync(CLAUDE_BIN, args, {
@@ -346,7 +346,7 @@ function runWindow(sessionId, transcriptPath, fromOffset) {
     + (remaining ? ` — ${Math.round(remaining / 1000)}K still to drain` : ' — fully drained'),
     sessionId);
 
-  // Keep the human-readable review log (this is what the owner reads while judging capture).
+  // Keep the human-readable review log (this is what a reviewer reads while judging capture).
   try {
     fs.mkdirSync(captureLogDir(), { recursive: true });
     fs.appendFileSync(path.join(captureLogDir(), slug(sessionId) + '.jsonl'), JSON.stringify({
@@ -364,7 +364,7 @@ function runWindow(sessionId, transcriptPath, fromOffset) {
 /**
  * Release the in-flight lock `capture.mjs` took before spawning us.
  *
- * IT WAS NEVER RELEASED (fixed 2026-07-16, cold panel — three agents converged, one found both
+ * IT WAS NEVER RELEASED (both
  * locks still on disk ~50 min after their drains had logged "fully drained"). This file contained
  * no `lock` reference at all; the only `unlinkSync` was capture.mjs's 30-minute stale path.
  *

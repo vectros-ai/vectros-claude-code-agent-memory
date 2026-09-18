@@ -135,8 +135,8 @@ export function classifyOrphanQueue(q, opts = {}) {
 
 /**
  * Read the directory into the plain listing `planOrphanCap` consumes — real sessions only
- * (`isReal`, the same allow-list `reap.mjs`/`report.mjs`/`backfill.mjs` all apply to this exact
- * directory), and only files that actually have SOMETHING pending (a settled queue can never
+ * (`isReal`, the same allow-list `reap.mjs`/`report.mjs` and a separate internal migration tool
+ * all apply to this exact directory), and only files that actually have SOMETHING pending (a settled queue can never
  * breach, so skipping it here is one less file this cheap, inline, per-Stop scan has to fold).
  */
 export function collectOrphanCandidates({ queueD = queueDir() } = {}) {
@@ -165,8 +165,8 @@ export function collectOrphanCandidates({ queueD = queueDir() } = {}) {
  * writes one run may make (the blast-radius rail a predicate bug costs), which is a statement
  * about writes, not about how many queues happen to produce them.
  *
- * ⚠ A SINGLE QUEUE MAY BE SPLIT ACROSS `breach`/`deferred` (review finding, 2026-08-14, CONFIRMED
- * live regression). The prior shape deferred a breaching queue WHOLE the instant its own pending
+ * ⚠ A SINGLE QUEUE MAY BE SPLIT ACROSS `breach`/`deferred` — a confirmed live regression. The prior
+ * shape deferred a breaching queue WHOLE the instant its own pending
  * count exceeded the remaining budget — sound-looking ("never half-settle one queue's candidates
  * in a run"), but wrong in the direction that matters: `budget` never exceeds `max`, so any SINGLE
  * queue whose pending count exceeds `ORPHAN_CAP_MAX_PER_RUN` could never satisfy `pending.length

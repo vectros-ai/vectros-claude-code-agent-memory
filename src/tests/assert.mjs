@@ -8,9 +8,9 @@
  *
  * If `read()` returned zero, that prints `pending=0  (expect 2: c1,c2)` and **exits 0**. Nine of
  * ten files had no assertion of any kind; the tenth gated on a stderr regex for errors the code
- * under test swallows by design (`main().catch(() => {})`). A reviewer found the whole suite was
- * green by construction — and, before that, found every file dead on line 9 with a ReferenceError
- * the author never saw because he read the output instead of the exit code.
+ * under test swallows by design (`main().catch(() => {})`). The whole suite turned out to be
+ * green by construction — and, before that, every file was dead on line 9 with a ReferenceError
+ * that went unnoticed because the output was read instead of the exit code.
  *
  * That is the exact failure this project keeps documenting and re-committing: a signal that cannot
  * observe the thing it claims. `recall.mjs` shipped wired-and-dead because its tests fed it

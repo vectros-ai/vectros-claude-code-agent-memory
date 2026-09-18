@@ -2,12 +2,10 @@
 /**
  * THE RECEIPT-DISCIPLINE ENFORCER — every fail-open catch must say what it did, checked mechanically.
  *
- * WHY THIS FILE EXISTS, in the reviewer's words: *"this discipline needs a `run-all.mjs`, not another
- * paragraph."*
+ * WHY THIS FILE EXISTS: this discipline needs a `run-all.mjs`, not another paragraph.
  *
- * The evidence for that is the sharpest thing anyone has said about this branch. Four censuses were
- * opened. Two closed permanently; two kept reverting to instance-fixing. The split was not effort
- * and it was not care:
+ * Four censuses were opened against this codebase. Two closed permanently; two kept reverting to
+ * instance-fixing. The split was not effort and it was not care:
  *
  *   | census              | closed? | had a mechanical enforcer? |
  *   |---------------------|---------|----------------------------|
@@ -19,7 +17,7 @@
  * The two that closed are the two with a machine checking them. The two that stayed open were
  * handed over as a WRITTEN LIST WITH file:line — the strongest possible version of "write it down
  * forcefully" — and were still swept only where a test named the instance. Twice, inside this very
- * fix, the author fixed the site the test named and not the shape, and the next run named the next
+ * fix, only the site the test named got fixed, not the shape, and the next run named the next
  * site. Both times the TEST did the sweeping. Where no test existed, no sweep happened.
  *
  * That is the real claim, and it indicts prose as a control. So this is the control.
@@ -33,26 +31,26 @@
  *   5. DECLARE      — carry `silence-ok: <reason>` inside the block
  *
  * (5) is not a loophole, it is the point. this discipline permits silence — "missing → a safe default, quietly"
- * — and the re-review WITHDREW part of its own census on exactly that ground. A rule that cannot
- * express its legitimate exceptions gets disabled wholesale. So the exception must be written at the
- * site, must carry a reason, and is greppable forever:  grep -rn 'silence-ok' hooks/*.mjs
+ * — and an earlier, narrower version of this rule was withdrawn on exactly that ground. A rule that
+ * cannot express its legitimate exceptions gets disabled wholesale. So the exception must be written
+ * at the site, must carry a reason, and is greppable forever:  grep -rn 'silence-ok' src/*.mjs
  *
- * WHY EVERY CATCH, and not the narrower rule the re-review proposed ("every `catch` that returns a
- * default"). Because the narrower rule MISSES THE ROOT FINDING OF THE RE-REVIEW ITSELF. `loadCreds`
- * was:
+ * WHY EVERY CATCH, and not the narrower rule tried earlier ("every `catch` that returns a
+ * default"). Because the narrower rule MISSES THE CASE THAT MOTIVATED THIS RULE IN THE FIRST PLACE.
+ * `loadCreds` was:
  *
  *     let file = {};
  *     try { ... file = parsed; } catch { /​* missing/unreadable/malformed → fail-open *​/ }
  *
  * The catch body is EMPTY — the default was established *before* the try. A lint scoped to catches
  * that return a default would have graded that file clean while the worst violation of this discipline in the
- * system sat inside it. The reviewer found it by READING, not by the rule they proposed; encoding
- * their sentence literally would have encoded the blind spot with it. An empty catch is the most
+ * system sat inside it. It was found by reading the code, not by the narrower rule; encoding
+ * that rule literally would have encoded the blind spot with it. An empty catch is the most
  * silent thing there is, so it needs a reason more than any other shape, not less.
  *
  * WHAT THIS FILE MUST NOT DO — and the reason it is built the way it is: a lint that silently skips
- * what it cannot parse would be the exact defect under review, shipped as its own remedy. So the
- * scanner self-checks (braces must balance after blanking) and a file it cannot parse FAILS the run
+ * what it cannot parse would be the exact defect this file exists to catch, shipped as its own
+ * remedy. So the scanner self-checks (braces must balance after blanking) and a file it cannot parse FAILS the run
  * rather than passing quietly. A checker that cannot observe what it claims is worse than none,
  * because it also confers confidence.
  */

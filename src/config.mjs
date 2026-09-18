@@ -60,8 +60,8 @@ import { configFile } from './paths.mjs';
  * reads this file exactly ONCE per process by design — the value and the read must agree, and a
  * path that could change between them would be worse than one that cannot.
  *
- * NOTE (owner decision, surfaced not settled): the adopter-facing NAME and LOCATION of this file
- * are finalized as part of OSS packaging. `config.json` here is the dogfood default; nothing public
+ * NOTE (surfaced, not settled): the adopter-facing NAME and LOCATION of this file
+ * are finalized as part of OSS packaging. `config.json` here is the current default; nothing public
  * consumes it yet, so it is safe to move.
  */
 export const CONFIG_PATH = configFile();
@@ -108,7 +108,7 @@ export const SPEC = {
     // fix (plain temp+rename lost 56% of writes). Same "a rail must exclude the dangerous region"
     // rule as CONTEXT_CAP's 9999 and STALE_SESSION_MS's 4h floor.
     parse: posInt(1, 1_000),
-    note: 'MEASURED 2026-07-16, 4 procs x 4000 cycles on one file. Windows MoveFileEx REFUSES to '
+    note: 'Measured: 4 procs x 4000 cycles on one file. Windows MoveFileEx REFUSES to '
       + 'replace a file another process holds open: plain temp+rename lost 9055/16000 writes (56%); '
       + 'with this retry, 5/16000 (0.03%). Retries x RENAME_RETRY_MS is the whole contention budget. '
       + 'Also bounds the READ path\'s contention spin in readJsonSafe. Do not lower it to "tidy".',
@@ -161,7 +161,7 @@ export const SPEC = {
      * so it is the floor rather than a sensible setting; the default keeps the 2.5x margin.
      */
     parse: posInt(30 * 60_000, 24 * 60 * 60_000),
-    note: 'n=1 for the raise (30 -> 60 min, 2026-07-20) and the reasoning is in lock.mjs: ONE '
+    note: 'n=1 for the raise (30 -> 60 min) and the reasoning is in lock.mjs: ONE '
       + 'threshold above the real worst case for BOTH callers, because hardening one side of a '
       + 'shared resource just moves the race to the other side. Live log evidence: the only genuine '
       + 'stale-lock clear observed was 6901s old (a truly dead worker); the other 26 were the lock '
@@ -174,7 +174,7 @@ export const SPEC = {
     // Max is 9999, not 10_000: the note (and recall.mjs/evaluate.mjs) say the budget MUST stay
     // *under* the 10K additionalContext ceiling the platform enforces, so the ceiling value itself
     // is out of range. `posInt(1, 10_000)` accepted exactly 10000 — the one value the bound exists
-    // to exclude. (Cold-panel finding, both lenses, 2026-07-17.)
+    // to exclude.
     parse: posInt(1, 9999),
     note: 'injected additionalContext budget; MUST stay UNDER the 10K ceiling the platform enforces '
       + '(so 9999 is the max accepted). Default 9500 leaves headroom. Was duplicated in recall.mjs + evaluate.mjs.',
@@ -188,7 +188,7 @@ export const SPEC = {
    *
    * An earlier design note shipped the first three as `n=0 — GUESS` and said so:
    * that is WHY a residual-measurement approach landed first. It made residual measurable; these are now set from what it
-   * measured, on 2026-07-20, over 13 real sessions carrying a transcript path:
+   * measured, over 13 real sessions carrying a transcript path:
    *
    *   total residual at rest ....... 850K chars
    *   orphaned (idle > 24h) ........ 617K across 9 sessions
@@ -219,8 +219,8 @@ export const SPEC = {
      * sessions faster) while staying well clear of a lunch break. Ceiling 30 days.
      */
     parse: posInt(4 * 60 * 60 * 1000, 30 * 24 * 60 * 60 * 1000),
-    note: 'n=13 (2026-07-20) — how long a session must be QUIET before its residual counts as '
-      + 'orphaned and the sweep may flush it. OWNER-SET at 24h and CONFIRMED by the data: the 9 '
+    note: 'n=13 — how long a session must be QUIET before its residual counts as '
+      + 'orphaned and the sweep may flush it. Set at 24h and CONFIRMED by the data: the 9 '
       + 'sessions past it were genuinely done (36-47h idle), the 4 under it were live or same-day. '
       + 'A long threshold is what makes paused-vs-done moot.',
   },
@@ -232,7 +232,7 @@ export const SPEC = {
     // the bound exists to exclude" shape as CONTEXT_CAP's old 10_000. The design's own range was
     // "a few hundred–2K", so 500 is its bottom, not a new opinion.
     parse: posInt(500, 1_000_000),
-    note: 'n=13 (2026-07-20) — the smallest tail worth a Haiku call. MEASURED: every session with '
+    note: 'n=13 — the smallest tail worth a Haiku call. MEASURED: every session with '
       + 'any residual had >=10K, and none had 1-10K, so 2K cuts NOTHING observed. It is therefore a '
       + 'phantom guard (a session that produced almost nothing must never be billed), not a '
       + 'coverage decision. If a future census shows real tails under it, that is a reason to lower '
@@ -258,7 +258,7 @@ export const SPEC = {
       + 'projection clock already in capture.mjs) — but the COST it governs IS measured, and this '
       + 'is the string to read before lowering it. The scan spawns no inference, but it is NOT '
       + 'free: it reads and JSON-parses the transcript of every stale session not yet swept. '
-      + 'MEASURED 2026-07-20: ~1.7s and 155MB against a 10-session backlog, falling to ~10ms once '
+      + 'Measured: ~1.7s and 155MB against a 10-session backlog, falling to ~10ms once '
       + 'those carry a `swept` marker. It runs on Stop (off the reply path), at most once per this '
       + 'interval. Lowering it multiplies that scan, not a stat.',
   },
@@ -278,7 +278,7 @@ export const SPEC = {
     // Ceiling 8000, not 8192: the SAME lesson CONTEXT_CAP's own note already paid for — a bound must
     // EXCLUDE the dangerous region, not merely equal it. 8192 bytes is around where the API's own
     // request-body-size cap sits. This CHAR ceiling alone does NOT guarantee the byte ceiling — a
-    // review finding caught that a char-only cap is false advertising against a byte-count limit
+    // char-only cap is false advertising against a byte-count limit
     // for multi-byte-heavy text (CJK/emoji/Cyrillic can be several bytes per char), so `clampQuery`
     // below ALSO enforces a byte backstop (`QUERY_MAX_BYTES`) on top of this one. This value stays
     // the primary, operator-facing knob (first N chars carry the intent, matching every sibling
@@ -452,7 +452,7 @@ export const SPEC = {
   },
 
   /**
-   * ── MID-RUN EVALUATION (`PostToolUse`, R2). Off the reply path — it stages a result for the NEXT
+   * ── MID-RUN EVALUATION (`PostToolUse`). Off the reply path — it stages a result for the NEXT
    * prompt rather than blocking this one — so these are spend and freshness bounds, not latency.
    */
   EVAL_DEBOUNCE_MS: {
@@ -721,10 +721,10 @@ export const SPEC = {
     def: 12,
     env: 'VECTROS_MEM_NUDGE_MAX',
     parse: posInt(1, 100),
-    note: 'MEASURED headroom, 2026-07-17: the worst live session held 12 pending rendering to '
+    note: 'Measured headroom: the worst live session held 12 pending rendering to '
       + '3673c against a 9500c CONTEXT_CAP. TWO NUMBERS, DIFFERENT THINGS (nudge.mjs carries the pair '
       + 'too): WORST CASE ~315c/candidate with every field at its cap, which is what this cap must be '
-      + 'safe against. OBSERVED, re-measured 2026-07-29 over all 35 real pending '
+      + 'safe against. OBSERVED, re-measured over 35 real pending '
       + 'candidates: min 192c, median 220c, MEAN 223c, max 261c — an observed cliff at ~42 against '
       + 'a worst-case cliff at ~26. This cap keeps the block clear of both — past the cliff '
       + 'recall drops the WHOLE block every prompt and the only escape is disposal, which only the '
@@ -814,8 +814,8 @@ export const SPEC = {
   /**
    * ── THE REAPER. `state/` and `queue/` grow without bound and nothing prunes them.
    *
-   * MEASURED on the dogfood machine 2026-07-29 (a re-census, not the original numbers — the earlier
-   * pass measured 2,548 on 2026-07-20, so the population had more than doubled in nine days):
+   * Measured (a re-census, not the original numbers — the earlier
+   * pass found roughly half as many, so this population grows fast):
    *
    *   state/ ......... 5,779 files, 0.8 MB, corpus only 15.7 days old  (~368/day)
    *   of which ....... 5,450 hold EXACTLY {orientPending, orientSource, orientedAt}
@@ -848,7 +848,7 @@ export const SPEC = {
     // ABSENCE of a Stop, and a live session that has taken a prompt but not yet finished a turn
     // looks exactly like one. A day is comfortably longer than any session that is still going.
     parse: posInt(24 * 60 * 60 * 1000, 365 * 24 * 60 * 60 * 1000),
-    note: 'MEASURED 2026-07-29 — how long a state file that NEVER reached a Stop and has no queue '
+    note: 'Measured — how long a state file that NEVER reached a Stop and has no queue '
       + 'survives, aged by mtime (it has no lastStopAt to age by; see the block header). 5,450 of '
       + '5,779 files are this shape, so this is the knob that does ~94% of the work. Such a file '
       + 'holds only {orientPending, orientSource, orientedAt} for a session that never took a '
@@ -936,12 +936,12 @@ export const SPEC = {
     parse: posInt(100, 1_000_000),
     note: 'A SECOND BACKSTOP alongside the reaper above, and it exists because the sweep\'s cost bound '
       + 'currently rests on an invariant in ANOTHER file — residual.mjs\'s `if (!s.transcriptPath) '
-      + 'continue`, which an independent review caught one change away from inverting. If that '
+      + 'continue`, which is one change away from inverting. If that '
       + 'guard ever flips, every phantom enters the expensive path permanently (state parse + queue '
       + 'fold + full transcriptLength, every sweep, forever, because a below-floor residual means '
       + 'markSwept never fires so skipSwept never excludes it). This cap makes that regression '
-      + 'DEGRADE rather than COMPOUND. It is deliberately far above the 56 real sessions measured '
-      + '2026-07-29, so it never bites in normal operation — and the sweep SAYS when it truncates, '
+      + 'DEGRADE rather than COMPOUND. It is deliberately far above the 56 real sessions this was '
+      + 'measured against, so it never bites in normal operation — and the sweep SAYS when it truncates, '
       + 'because a silent cap reads as "covered everything".',
   },
 };
@@ -1001,7 +1001,7 @@ export const CONSTRAINTS = [
   },
   {
     /**
-     * CLAMPED, not warned — the PM cold pass was right that this one is different in kind. Its own
+     * CLAMPED, not warned — this one is different in kind. Its own
      * message says the consequence is "permanently unflushable", i.e. DATA LOSS, and then the value
      * was applied anyway. A `warn` is correct where both settings are legitimate and only the
      * combination is hazardous; here one of them is simply wrong, and there is an unambiguous safe
@@ -1119,7 +1119,7 @@ export function resolveConfig({ file, env }) {
  * and then SUPPRESSED the "applied" line whenever state wasn't ok/fresh — a receipt that lied about
  * the value actually used, in the exact module whose contract is "say which value you used." So: the
  * file-state line reports the FILE is unusable (true) without asserting the outcome, and the applied
- * line fires whenever any override took effect, REGARDLESS of file state. (Cold-panel finding, 2026-07-17.)
+ * line fires whenever any override took effect, REGARDLESS of file state.
  */
 export function reportConfig(r, file, log = hlog) {
   if (r.state === 'unreadable') {
@@ -1317,7 +1317,7 @@ export const SWEEP_MAX_ENUMERATE = V.SWEEP_MAX_ENUMERATE;
  * `search()` and recall-eval-worker.mjs's `search()` both do. One function, one constant: a future
  * third caller inherits the bound by calling this, not by remembering to re-derive the number.
  *
- * TWO BOUNDS, not one — a review finding on the first cut caught the gap. A char-count cap alone
+ * TWO BOUNDS, not one — the first cut missed this gap. A char-count cap alone
  * is FALSE ADVERTISING against a BYTE-count server-side threshold: `RECALL_QUERY_MAX_CHARS` chars
  * of CJK/emoji/Cyrillic clamp cleanly by the char rule and can still be 2-4x that many BYTES —
  * MEASURED, a 4000-char all-CJK query produced a 12039-byte body against an 8192-byte request-size
@@ -1337,7 +1337,7 @@ export const SWEEP_MAX_ENUMERATE = V.SWEEP_MAX_ENUMERATE;
  * `search()` callers build their query from `state.lastAssistant` (stop.mjs stashes the last
  * assistant message VERBATIM, no sanitization), and Claude Code's own hook-payload markup
  * (`<task-notification>…</task-notification>`, `<tool-use-id>…</tool-use-id>`) legitimately
- * appears inside real assistant-visible content. MEASURED live, 2026-08-18: 13 `search HTTP 403`s
+ * appears inside real assistant-visible content. Measured live: 13 `search HTTP 403`s
  * in a 48-hour window, every one with tag-shaped content in its logged `shape=` excerpt —
  * `waf-receipt-test.mjs` widened the DIAGNOSTIC receipt for this exact shape a while back but
  * never addressed the cause; this closes it.
@@ -1378,7 +1378,7 @@ function stripHarnessMarkup(s) {
 
 /**
  * Break the literal `../`/`..\` byte pattern `GenericLFI_BODY` matches. Unlike the tag-stripper
- * above, there is no "legitimate vs malicious" line to walk here: a prior dogfood measurement of
+ * above, there is no "legitimate vs malicious" line to walk here: a measurement of
  * this WAF label found an ordinary relative markdown link (`../README.md`) trips it exactly as
  * hard as a real traversal payload does — the WAF has no way to tell them apart on this shape, so
  * neither does this function. The only goal is defeating the literal contiguous match while
@@ -1395,7 +1395,7 @@ function neutralizePathTraversal(s) {
  * request sweep found this label is NOT scoped to the cloud metadata IP alone — it also fires on
  * plain loopback literals (`127.0.0.1`) and the bare hostname `localhost`, i.e. any private/
  * loopback/link-local-shaped address. That breadth is exactly why this is worth fixing here beyond
- * the one canonical example: this hook's own dogfood vocabulary (`127.0.0.1:PORT`, a local test-DB
+ * the one canonical example: this hook's own local-dev vocabulary (`127.0.0.1:PORT`, a local test-DB
  * port, `localhost`) is dense with the shape, so an ordinary local-dev-workflow session can trip
  * this, not only a security-engineering one. Same technique as path traversal — insert a space
  * (or, for the bare word, a mid-word space) to defeat the literal match without discarding any

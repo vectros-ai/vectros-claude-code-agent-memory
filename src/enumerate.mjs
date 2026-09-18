@@ -33,8 +33,8 @@ const BASE = (cred('VECTROS_API_BASE_URL') || 'https://api.vectros.ai').replace(
  * conflated. The caller still could not tell them apart, so `recall.mjs` read "no pinned
  * records" identically to "the API is down", and its orient boundary latched forever for
  * every user whose pinned tier is legitimately empty — i.e. every new user and every OSS
- * adopter, and never this machine, which has pinned records. The dogfood structurally could
- * not surface it.
+ * adopter, and never a machine with pinned records already — that shape structurally could
+ * not surface it in local testing.
  *
  * `null` vs `[]` is `project.mjs`'s contract, three files away, for exactly this reason: it
  * refuses to project a failed read as "empty" because that would WIPE the pinned block out of
@@ -62,7 +62,7 @@ async function lookup(body) {
       //
       // WIDENED the same way recall.mjs's search-error receipt was widened:
       // requestId / x-amz-cf-id / a redacted body shape. An earlier "persistent shape/validation
-      // 400 on {field:'threadId'}" hypothesis did NOT reproduce (verified 2026-07-22 — see the
+      // 400 on {field:'threadId'}" hypothesis did NOT reproduce (verified — see the
       // header comment above `fetchOrientSet`), but a future transient failure on THIS lookup
       // deserves the same diagnosability the search path just got, not a narrower receipt because
       // this particular guess turned out wrong.
@@ -139,8 +139,8 @@ function line(rec) {
  * store where the ordinary search reaches them. Losing their ENUMERATION is a real cost; paying it
  * forever, plus the pinned block, is a bigger one.
  *
- * THE "PERSISTENT SHAPE/VALIDATION 400" HYPOTHESIS ABOVE DID NOT REPRODUCE (verified
- * 2026-07-22, three independent checks): (1) `list_schemas` on the live `memory` type shows
+ * THE "PERSISTENT SHAPE/VALIDATION 400" HYPOTHESIS ABOVE DID NOT REPRODUCE (verified,
+ * three independent checks): (1) `list_schemas` on the live `memory` type shows
  * `threadId` correctly declared in `lookupFields` (`rangeEnabled:false`), which is exactly the
  * `value:`-exact-match shape this file sends — not the `from`/`to` range shape that WOULD 400
  * against a non-range field. (2) Calling `fetchOrientSet(sid, 'resume')` directly against the live
@@ -187,7 +187,7 @@ export async function fetchOrientSet(sessionId, source) {
 /**
  * Render the enumerated set as injectable lines. Returns [] when there is nothing to say.
  *
- * THE PINNED SET IS NO LONGER RENDERED HERE (2026-07-17). `project.mjs` materializes the pinned
+ * THE PINNED SET IS NO LONGER RENDERED HERE. `project.mjs` materializes the pinned
  * set into the harness-auto-loaded `MEMORY.md` — "the harness, not a hook, does the loading". So
  * injecting the pinned block here too was a DOUBLE-load: every hook-enabled session already had the
  * pins from MEMORY.md, and re-injecting them (~10K, pinned-first, never-dropped) ate the first

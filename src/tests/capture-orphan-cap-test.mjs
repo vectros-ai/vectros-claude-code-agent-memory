@@ -1,5 +1,5 @@
 // RED-PROOF: capture.mjs's orphan-cap spawn-decision block — the one thing that decides whether
-// the orphan-cap worker ever runs in real use, and (per review, 2026-08-14) previously the single
+// the orphan-cap worker ever runs in real use, and previously the single
 // most significant untested piece of this whole mechanism: the off-switch skip, the due-gate
 // skip, the spawn args, and the debounce-marker-stamped-on-decision behaviour were all unverified.
 //
@@ -25,11 +25,11 @@ import { startFakeRecordsServer } from './fake-records-server.mjs';
 // §0's "nothing breaches" and §2/§3's "untouched" assertions need a corpus this file fully
 // controls, not the shared suite-wide root sibling test files also leave breaching fixtures in.
 // MUST come before the unlink below — `privateRoot()` re-stamps VERDICT_MUTATIONS_OFF into the
-// NEW root (review, 2026-08-17: unlinking against the OLD shared root before moving left the new
+// NEW root (unlinking against the OLD shared root before moving left the new
 // root's marker untouched — accidentally, not structurally, permissive).
 privateRoot('capture-orphan-cap-test');
 
-// Same opt-out as orphan-cap-worker-test.mjs/backfill-test.mjs — this file's only store is the
+// Same opt-out as orphan-cap-worker-test.mjs — this file's only store is the
 // fake server below, so the default guard against a test settling against the REAL store must go.
 try { fs.unlinkSync(verdictMutationsOffFile()); } catch { /* fine — not there yet */ }
 
@@ -49,7 +49,7 @@ fs.writeFileSync(T, ''); // empty — keeps the ordinary distiller gate (`doCapt
 // distiller/capture-worker spawn path capture.mjs also owns.
 fs.writeFileSync(workersOffFile(), '1');
 
-const ENV = { ...process.env, VECTROS_API_KEY: 'ssk_test_fake_for_capture_orphan_cap_test', VECTROS_API_BASE_URL: server.url, VECTROS_MEM_ORPHAN_CAP_DAYS: '7' };
+const ENV = { ...process.env, VECTROS_API_KEY: 'ssk_test_invalid_for_capture_orphan_cap_test', VECTROS_API_BASE_URL: server.url, VECTROS_MEM_ORPHAN_CAP_DAYS: '7' };
 
 function spawnCapture(sessionId, env = ENV) {
   return new Promise((resolve) => {

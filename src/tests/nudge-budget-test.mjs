@@ -29,7 +29,7 @@ for (const f of [QP, SP]) { try { fs.unlinkSync(f); } catch {} }
 try { fs.unlinkSync(verdictMutationsOffFile()); } catch { /* fine — not there yet; this file only proposes, but candidates.mjs's call() checks the marker on every write regardless of verb */ }
 
 /**
- * THE FAKE RECORD STORE, as of 2026-08-14 (B2) — same reason as nudge-test.mjs: recall.mjs's
+ * THE FAKE RECORD STORE — same reason as nudge-test.mjs: recall.mjs's
  * OWN-session nudge reads `candidates.mjs`'s `addressablePending(sessionId)` now, not the local
  * file queue, so this suite has to seed records. `/v1/search` is also stubbed (empty results).
  */

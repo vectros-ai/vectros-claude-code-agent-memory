@@ -19,8 +19,8 @@ import {
 } from '../orphan-cap.mjs';
 
 // REAL, UUID-shaped ids — §3 below exercises collectOrphanCandidates()'s directory scan, which
-// filters through residual.mjs's isReal() (the same reason backfill-test.mjs/writeoff-test.mjs use
-// them): a human-readable id would be silently excluded, and §3's own assertions would pass for
+// filters through residual.mjs's isReal() (the same reason every OTHER `--all`-style scan in this
+// suite needs them): a human-readable id would be silently excluded, and §3's own assertions would pass for
 // the wrong reason (excluded, not genuinely collected).
 const SID = randomUUID();
 const SID2 = randomUUID();

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Stop hook — L2 rolling-window feed (agent-memory flagship dogfood).
+ * Stop hook — L2 rolling-window feed.
  *
  * Fires when the assistant finishes a turn; receives `last_assistant_message`.
  * Its deterministic job: stash the tail of that message into the per-session state
@@ -18,7 +18,7 @@ import { readState, writeState } from './state.mjs';
 import { stateDir } from './paths.mjs';
 import { STASH_CHARS } from './config.mjs';
 
-// Re-entrance guard: no-op inside the R2 evaluator's own nested `claude -p`
+// Re-entrance guard: no-op inside the mid-run evaluator's own nested `claude -p`
 // (which sets VECTROS_RECALL_EVAL=1), so it never re-fires the recall loop.
 if (process.env.VECTROS_RECALL_EVAL === '1') process.exit(0);
 
@@ -60,12 +60,12 @@ async function main() {
      * `residual.mjs`'s `if (!s.transcriptPath) continue` is what excludes phantom sessions from the
      * sweep's enumeration BY CONSTRUCTION, and this hook is the only writer of that field. Desktop
      * spawns ~1-2 phantom Stops per minute, all with an empty message; stamping a path here would
-     * admit every one of them permanently. MEASURED on this machine: 2,548 state files, of which
+     * admit every one of them permanently. MEASURED on a Windows 11 dev machine: 2,548 state files, of which
      * **19** carry a transcriptPath today. Each admitted phantom becomes an enumerated row once 24h
      * idle, is NEVER swept (its residual is below the floor, so `markSwept` never fires, so
      * `skipSwept` never excludes it), and is therefore re-read — state parse + queue fold +
      * `transcriptLength` — on every sweep, forever, against a population growing ~1,440-2,880/day.
-     * There was no reaper for `state/` or `queue/` until `reap.mjs` was added, which is now wired into this same Stop path. (PM cold review, H2.)
+     * There was no reaper for `state/` or `queue/` until `reap.mjs` was added, which is now wired into this same Stop path.
      *
      * The liveness fix stands on `lastStopAt` alone: an empty Stop proves the session is ALIVE,
      * which is the only question the staleness clock asks. A session that has ever produced an

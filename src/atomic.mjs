@@ -1,7 +1,7 @@
 /**
  * Atomic file primitives — the one safe way to write shared state from a hook.
  *
- * WHY THIS EXISTS (measured 2026-07-16, not theorised):
+ * WHY THIS EXISTS:
  *
  * Six hook processes read-modify-write ONE state file per session, and `Stop` is wired to two
  * of them (`stop.mjs` + `capture.mjs`), so every Stop races by configuration. `writeFileSync`
@@ -57,7 +57,7 @@ import { tunables } from './config.mjs';
 /**
  * ⚠ EVERY BINDING BELOW IS A HOISTED `function`, NOT A `const`, AND THAT IS LOAD-BEARING.
  *
- * THE BUG THIS FIXES, reproduced against the real modules (2026-07-29, cold review):
+ * THE BUG THIS FIXES, reproduced against the real modules:
  *
  *     $ VECTROS_MEMORY_CONFIG=<a directory> node recall.mjs
  *     ReferenceError: Cannot access 'CONTENDED' before initialization
@@ -114,7 +114,6 @@ function isContended(code) { return code === 'EPERM' || code === 'EACCES' || cod
  *
  * `var` is hoisted AND initialized to `undefined`, so it has no dead zone at all. That is the whole
  * reason to reach for it here, in the one module whose exports run before its own body.
- * (PM cold pass, 2026-07-30.)
  */
 var _ia; // eslint-disable-line no-var -- hoisted-and-initialized: see above, this must not be TDZ
 function sleepSync(ms) {
@@ -167,7 +166,7 @@ export function writeFileAtomic(file, data) {
 export function readJsonSafe(file, defaults = {}) {
   let raw;
   /**
-   * RETRY ON CONTENTION — the read path had none (fixed 2026-07-16, cold panel).
+   * RETRY ON CONTENTION — the read path had none.
    *
    * `CONTENDED` was consulted at both WRITE sites and nowhere else, so `EPERM`/`EACCES`/`EBUSY` on
    * a read — which mean "someone has this open right now", not "this file is damaged" — returned
@@ -181,8 +180,8 @@ export function readJsonSafe(file, defaults = {}) {
    * frequent reader), racing `writeState` on every Stop.
    *
    * This is the fourth of four mechanisms this branch wired only at the site where its bug was
-   * diagnosed — the panel's systemic finding, and the one my own accounting already named while the
-   * MR claimed it fixed.
+   * diagnosed — a systemic gap, already named as unfixed while the
+   * change claimed otherwise.
    *
    * ── `unreadable` vs `damaged`: THE DISTINCTION IS THE WHOLE CONTRACT ──
    *
@@ -259,7 +258,7 @@ export function readJsonSafe(file, defaults = {}) {
  * beyond its last 2000 lines. The instrument that exists because fail-open hooks are silent was
  * built to become amnesiac.
  *
- * CORRECTION (review, 2026-07-16) — BOTH defects were LATENT; neither had ever fired. The log sits
+ * CORRECTION — BOTH defects were LATENT; neither had ever fired. The log sits
  * under `MAX_BYTES`, so `rotateAtomic` had never run. The original justification for this change
  * said the discard "is why the log answered for only ~21 hours while the state files went back
  * days" — **that was false, and self-contradictory with the very next clause** ("dormant only

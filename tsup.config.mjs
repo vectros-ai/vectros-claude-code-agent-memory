@@ -14,11 +14,9 @@ import { defineConfig } from 'tsup';
  * flat and one-file-per-entry (`init` deploys the BUILT `dist/` tree to
  * `~/.claude/vectros-memory/`, and Claude Code's `settings.json` hook commands invoke individual
  * files there by name — `node .../recall.mjs`, `node .../capture.mjs`, … — not a single entry
- * point; a bundled single-file output would break that contract). Keeping this package's source
- * structurally aligned with the dogfood tree it was ported from also depends on that per-entry
- * shape.
+ * point; a bundled single-file output would break that contract).
  *
- * ⚠ A REAL INCIDENT LIVES HERE, worth knowing even now that it's fixed (2026-08-14): this file
+ * ⚠ A REAL DEFECT LIVED HERE, worth knowing even now that it's fixed: this file
  * spent its whole life ASSERTING `bundle: false` in this very prose without ever actually setting
  * it in the config object below — tsup's default is `bundle: true`, so every entry was FULLY
  * bundled, every sibling import replaced with that sibling's entire source, zero exceptions
@@ -27,8 +25,8 @@ import { defineConfig } from 'tsup';
  * `import.meta.url`-based self-check got duplicated, verbatim, into every OTHER entry that
  * imported anything from it — and spuriously matched there too, because after full bundling there
  * is no separate module identity left for `import.meta.url` to distinguish. `capture.mjs`
- * (importing from `reap.mjs`) and `backfill.mjs` (importing from `report.mjs`) both hit this for
- * real, one of them as an outright crash on the Stop-hook critical path. `bundle: false` is now
+ * (importing from `reap.mjs`) and a separate internal tool (importing from `report.mjs`) both hit
+ * this for real, one of them as an outright crash on the Stop-hook critical path. `bundle: false` is now
  * actually set below — verified against the real `dist/` output that zero sibling source survives
  * inlining anymore, every import is real. The `path.basename(process.argv[1])`-based self-checks
  * in `reap.mjs`/`report.mjs`/`project.mjs` stay as belt-and-braces even though `import.meta.url`

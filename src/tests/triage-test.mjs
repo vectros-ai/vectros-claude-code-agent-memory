@@ -1,4 +1,4 @@
-// R2 triage: does judging the ANSWER actually change what reaches the agent?
+// Answer-triage: does judging the ANSWER actually change what reaches the agent?
 //
 // The interesting cases all produce SILENCE or an INTERRUPT — neither of which the old code
 // could express. Drives the real evaluate.mjs injector against staged payloads, and unit-tests
@@ -62,7 +62,7 @@ const inject = (payload) => {
   fs.mkdirSync(path.dirname(STAGED), { recursive: true });
   fs.writeFileSync(STAGED, JSON.stringify(payload));
   const env = { ...process.env };
-  if (!env.VECTROS_API_KEY) env.VECTROS_API_KEY = 'sk_test_triage00000000000000000000000';
+  if (!env.VECTROS_API_KEY) env.VECTROS_API_KEY = 'sk_test_invalid_triage00000000000000000';
   const r = spawnSync(process.execPath, [path.join(DIR, 'evaluate.mjs')], {
     input: JSON.stringify({ session_id: SID, transcript_path: T, cwd: os.tmpdir(), hook_event_name: 'PostToolUse' }),
     encoding: 'utf8', timeout: 20000,

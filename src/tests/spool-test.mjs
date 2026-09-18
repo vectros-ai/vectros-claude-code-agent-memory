@@ -30,7 +30,7 @@ try { fs.unlinkSync(candidateSchemaGapFile()); } catch { /* fine */ }
  * THIS FILE OPTS IN TO PROMOTION, and it is the only one that may.
  *
  * `isolate.mjs` writes a `SPOOL_OFF` marker into every isolated root so no test can POST a
- * candidate to the owner's real store (credentials are deliberately not isolated). This file
+ * candidate to the real store (credentials are deliberately not isolated). This file
  * exercises the flush itself, and does so exclusively through an INJECTED fake transport — every
  * `flush` below passes `fetchImpl`, so nothing here can reach a network whatever the marker says.
  * Removing it is therefore safe HERE and nowhere else; do not copy this line into another test.
@@ -130,7 +130,7 @@ eq('...and the fold still reports ok', torn.state, 'ok');
   eq('...and still sees the events that came before it', t2.owed.filter((e) => e.externalId === 'k1').length, 1);
   check('...but the tear consumed the NEXT event too, not just itself',
     !t2.owed.some((e) => e.externalId === 'k3'), t2.owed.map((e) => e.externalId).join(','));
-  // A double-loss on a fail-open component must SAY so — review finding: this was silent while
+  // A double-loss on a fail-open component must SAY so — this was silent while
   // every other failure branch in this file logs. RED-proofed by reverting the hlog call.
   check('...and the double-loss is LOGGED, not silent',
     fs.readFileSync(process.env.VECTROS_HOOKLOG_PATH, 'utf8').includes('torn line was skipped'));

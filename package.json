@@ -1,6 +1,6 @@
 {
   "name": "@vectros-ai/claude-code-agent-memory",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "description": "Cross-session memory for Claude Code: recall relevant context automatically at the start of a turn, distill durable lessons out of a session involuntarily, and dispose them into your Vectros knowledge base under your own review. Pre-1.0 / beta.",
   "license": "Apache-2.0",
   "repository": {

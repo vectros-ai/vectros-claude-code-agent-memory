@@ -119,7 +119,7 @@ export function isStale(ageMs, staleMs) {
  *     logged as a blind spot rather than reported as `residual: 0`. This matters because it BIASES
  *     the headline number: stale (>24h) sessions are the ones most likely to have lost their
  *     transcript, i.e. the exact population the ORPHANED tally sizes — silently dropping them would
- *     undercount precisely what B exists to flush. (Cold-panel finding, both lenses, 2026-07-17.)
+ *     undercount precisely what B exists to flush.
  *
  * BOTH REFUSALS ARE NOW ALSO SPEND DECISIONS. The sweep flushes what this returns, so a
  * row it declines to emit is a session no distiller is spawned for. That is the correct direction —
@@ -156,12 +156,12 @@ export function residualBySession(nowMs, deps = {}) {
    * today the callers are `runSweep` (on Stop) and `report.mjs` (an operator keystroke). The gate
    * stays because the Stop path still benefits and the cost is real:
    *
-   * MEASURED 2026-07-20, before it existed: one call took **1818 ms** and returned zero rows.
+   * Measured, before this gate existed: one call took **1818 ms** and returned zero rows.
    * `transcriptLength` is a full `readFileSync` + `split('\n')` + `JSON.parse` per line, and this
    * loop ran it for EVERY session carrying a transcript path — 18 sessions, **218 MB** of JSONL —
    * on every `UserPromptSubmit`, to answer a question that then discarded the number. The staleness
-   * filter was applied by the CALLER, after the expensive part. (Found by review; the authoring
-   * session had "measured" 5ms, which was the module IMPORT, not the call — a number that answered
+   * filter was applied by the CALLER, after the expensive part. (An earlier "measured" figure of
+   * 5ms had actually measured the module IMPORT, not the call — a number that answered
    * a question nobody asked. → the `measurement taken in a configuration you do not ship` rule.)
    *
    *   minAgeMs  — skip a session younger than this BEFORE reading its queue or transcript.
@@ -191,8 +191,8 @@ export function residualBySession(nowMs, deps = {}) {
    *
    * The expensive path below is bounded today by `if (!s.transcriptPath) continue` — an invariant
    * that lives in ANOTHER FILE (`stop.mjs` is the only writer of that field, and it deliberately
-   * withholds it on empty Stops). An independent review already caught one change that would
-   * have stamped the path on every Stop, admitting all ~5,450 phantoms permanently: each then costs
+   * withholds it on empty Stops). One change came close to stamping
+   * the path on every Stop, which would have admitted all ~5,450 phantoms permanently: each then costs
    * a state parse + queue fold + full `transcriptLength` on EVERY sweep, forever, because a
    * below-floor residual means `markSwept` never fires so `skipSwept` never excludes it either.
    *
@@ -203,10 +203,10 @@ export function residualBySession(nowMs, deps = {}) {
    *
    * AND IT SAYS WHEN IT BITES. A cap that truncates quietly reads as "covered everything", which is
    * the exact failure this subsystem's receipts exist to prevent. Set far above the 56 real sessions
-   * measured 2026-07-29, so in normal operation this line never fires.
+   * measured against, so in normal operation this line never fires.
    */
   /**
-   * FILTER, THEN SORT, THEN SLICE — and the first cut did none of that (PM cold pass, 2026-07-30).
+   * FILTER, THEN SORT, THEN SLICE — and the first cut did none of that.
    *
    * It sliced raw `readdirSync` order before the `isReal` filter, which is wrong twice. Phantom and
    * test-shaped filenames consumed cap slots that real sessions needed; and `readdirSync` order is
@@ -226,11 +226,11 @@ export function residualBySession(nowMs, deps = {}) {
    */
   /**
    * ⚠ THE CAP COUNTS MEASURABLE SESSIONS, NOT FILES — and counting files was a real defect that
-   * made this backstop fire permanently while accusing an innocent mechanism (fixed 2026-08-01).
+   * made this backstop fire permanently while accusing an innocent mechanism.
    *
    * The cap used to be applied to the file list, HERE, one loop iteration before
-   * `if (!s.transcriptPath) continue` discards a phantom for free. MEASURED on the owner's machine
-   * that day: 4,633 state files, of which **98.7% were phantoms** — so 1,969 of the 2,000 cap slots
+   * `if (!s.transcriptPath) continue` discards a phantom for free. Measured: 4,633 state files, of
+   * which **98.7% were phantoms** — so 1,969 of the 2,000 cap slots
    * were spent on files the very next line throws away, and only **31 of 61** genuinely measurable
    * sessions got in. `report.mjs`'s residual was silently missing half its population, and the
    * sweep's view was truncated for a reason that had nothing to do with the sweep.
@@ -299,8 +299,8 @@ export function residualBySession(nowMs, deps = {}) {
     catch (e) { noteSkip(`state ${f} (residual)`, e); continue; }
     // A BARE `continue`, AND DELIBERATELY NOT A `noteSkip`. This is the phantom exclusion — a
     // session that never recorded a transcript path has nothing to measure BY CONSTRUCTION, not
-    // because we failed to read something. It is also the biggest population here: ~2,500 of 2,548
-    // state files when measured 2026-07-20, and the figure GROWS (2,816 the next day; nothing reaps
+    // because we failed to read something. It is also the biggest population here: roughly 98% of
+    // state files when measured, and the figure GROWS day over day (nothing reaps
     // it until the reaper lands). Routing it to the blind-spot ledger would bury the handful of genuine
     // unreadables that ledger exists to surface. Absence of capability, not a fault.
     if (!s.transcriptPath) { phantoms++; continue; }
@@ -335,7 +335,7 @@ export function residualBySession(nowMs, deps = {}) {
      * `minAgeMs` removes LIVE sessions — which were never the expensive population. The expensive
      * population is stale sessions with a big transcript, and every one of them was fully parsed
      * (`readFileSync` + per-line `JSON.parse`) so that `selectFlushable` could then discard it a
-     * moment later for having been swept already. MEASURED on this machine, after the "fix" that
+     * moment later for having been swept already. MEASURED on a Windows 11 dev machine, after the "fix" that
      * only added `minAgeMs`: **1695 ms and 155 MB per due sweep**, on the Stop hook, forever — the
      * cost does not fall away once the backlog drains, because an already-swept session stays
      * stale-with-a-path for the rest of time and is re-parsed to conclude nothing.
@@ -351,7 +351,7 @@ export function residualBySession(nowMs, deps = {}) {
       // without a count the sweep's receipt cannot tell "nothing has been idle long enough" from
       // "everything stale was already flushed" — and it asserted the former, which is false the
       // moment the backlog drains. An optimisation that silently empties a tally is how the
-      // `minAgeMs` version of this same shape produced a confidently wrong line. (PM cold, M2.)
+      // `minAgeMs` version of this same shape produced a confidently wrong line.
       if (deps.stats) deps.stats.skippedSwept = (deps.stats.skippedSwept || 0) + 1;
       continue;
     }

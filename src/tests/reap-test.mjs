@@ -47,7 +47,7 @@ import { spoolDir } from '../paths.mjs';
  * days past its window. The end-of-file guard that names this hazard fires long after the deletion.
  *
  * A destructive-lifecycle test must therefore refuse to run at all outside a root it created, and
- * refusing means exiting. (Review finding, 2026-07-29.)
+ * refusing means exiting.
  */
 if (!/vectros-mem-test-/.test(process.env.VECTROS_MEMORY_HOME || '')) {
   console.error('reap-test REFUSED TO RUN: VECTROS_MEMORY_HOME is not an isolate.mjs temp root '
@@ -112,7 +112,7 @@ console.log('\n=== 2. the refusals — each proven against an otherwise-identica
 
 const ancient = { sid: 's1', size: 100, mtimeMs: NOW - 500 * DAY, state: { lastStopAt: NOW - 500 * DAY } };
 // `state: 'ok'` on every queue fixture below is REQUIRED, and its absence was itself a finding:
-// these objects modelled a queue with no read-state at all, which the guard added on 2026-07-29
+// these objects modelled a queue with no read-state at all, which the guard
 // (anything not 'ok' is unknowable, so it stays) correctly refuses. A fixture that cannot express
 // the field the code branches on cannot test the branch.
 const okQ = (over = {}) => ({ state: 'ok', pending: [], handedAt: null, ...over });
@@ -125,7 +125,7 @@ eq('REFUSAL 2 — a live handed claim keeps it',
 eq('...and an EXPIRED handed claim does not (the TTL is real)',
   classifyState({ ...ancient, queue: okQ({ handedAt: NOW - 5 * 3_600_000 }) }, NOW, W).action, 'prune');
 /**
- * THE CASE THAT WAS MISSING, and the bug it now pins (review finding, 2026-07-29). `queue.read()`
+ * THE CASE THAT WAS MISSING, and the bug it now pins. `queue.read()`
  * returns `pending: []` for a queue it could NOT READ as well as for a settled one, so reading
  * only `pending.length` pruned the state file beside an unreadable queue — losing the
  * `transcriptPath` that is the only way to ever locate that queue's transcript again.
@@ -151,7 +151,7 @@ eq('an UNREADABLE queue is kept — its pending set is unknown', classifyQueue(q
  * fresh mtime, and a settled queue whose session was resumed today was pruned on a 100-day-old
  * `handed`. What goes is the watermark AND the disposed/superseded sets, so the delta gate rewinds
  * to zero and re-proposes everything already settled. Every fixture above pins `lastEventAt: null`,
- * which is exactly why the branch had no coverage. (PM cold pass, 2026-07-30.)
+ * which is exactly why the branch had no coverage.
  */
 eq('a settled queue with a STALE lastEventAt but a FRESH mtime is KEPT (a captured append moves only mtime)',
   classifyQueue(queueF({ lastEventAt: NOW - 200 * DAY, mtimeMs: NOW }), NOW, W).action, 'keep');
@@ -174,7 +174,7 @@ console.log('\n=== 3. the per-run cap defers rather than drops ===');
   /**
    * WITH QUEUES IN THE MIX — §3's original fixture had 25 states and ZERO queues, so
    * `prunable.slice(0, max)` passed it and the interleave (which carries a long justifying comment
-   * about a ~40-day starvation) was never exercised. (PM cold pass, 2026-07-30.)
+   * about a ~40-day starvation) was never exercised.
    */
   {
     const manyStates = Array.from({ length: 25 }, (_, i) => stateF({ sid: `ps${i}`, state: { orientPending: true }, mtimeMs: NOW - 30 * DAY }));
@@ -264,7 +264,7 @@ console.log('\n=== 4. end to end against a disposable root ===');
    * defaulted them, and then read neither: the body resolved through `stateFor`/`queueFor`, i.e. the
    * process-global root. So an alternate-listing run planned against a probe directory and unlinked
    * the same-named files out of the REAL runtime — files it had never classified. The parameters
-   * were never passed by any test, so the seam had no coverage at all. (PM cold pass, 2026-07-30.)
+   * were never passed by any test, so the seam had no coverage at all.
    */
   {
     const probe = fs.mkdtempSync(path.join(memoryHome(), 'probe-'));
@@ -368,7 +368,6 @@ console.log('\n=== 6. the debounce, and that a dry run really is dry ===');
    * THE KILL SWITCH. Checked BEFORE `force`, because `force` exists to bypass the debounce and must
    * not bypass "do not delete". Its absence is what let `tests/smoke.mjs` — the documented
    * post-deploy check, which runs the REAL hooks against the REAL runtime — perform a live delete.
-   * (PM cold pass, 2026-07-30.)
    */
   const doomed2 = '88888888-8888-8888-8888-888888888888';
   const p2 = path.join(stateDir(), `${doomed2}.json`);
@@ -398,14 +397,15 @@ console.log('\n=== 6. the debounce, and that a dry run really is dry ===');
 // ─────────────────────────────────────────────────────────────────────────────
 // 7. SMOKE MUST NOT DELETE — the end-to-end assertion, spawning capture.mjs the way smoke does.
 //
-//    THIS EXISTS BECAUSE MY MANUAL CHECK WAS VACUOUS. I measured the real state-file count before
-//    and after a smoke run, saw it unchanged, and called the fix verified — but `last-reaped` had
-//    been stamped minutes earlier by an explicit `--apply`, so the DEBOUNCE was suppressing the
-//    reap. The number was right for the wrong reason, and the fix itself had never landed (a
-//    scripted replace silently no-op'd). Two independent failures agreeing on a green.
+//    THIS EXISTS BECAUSE A MANUAL CHECK CAN BE VACUOUS. Measuring the real state-file count before
+//    and after a smoke run, seeing it unchanged, and calling the fix verified is not sufficient —
+//    if `last-reaped` was stamped minutes earlier by an explicit `--apply`, the DEBOUNCE alone
+//    would suppress the reap and produce that exact same unchanged count, even if the fix itself
+//    had never landed (e.g. a scripted replace that silently no-op'd). Two independent failures
+//    can agree on a green.
 //
 //    So this drives the real child process, with the reap genuinely DUE (no marker), and asserts
-//    the env var reaches it. The PM's instruction was explicit: verify the propagation against the
+//    the env var reaches it. Verify the propagation against the
 //    spawn call, not by inference. `smoke.mjs` spawns with `env: { ...process.env, … }`, which is
 //    what makes setting it in the parent sufficient — and that is the property under test here.
 // ─────────────────────────────────────────────────────────────────────────────

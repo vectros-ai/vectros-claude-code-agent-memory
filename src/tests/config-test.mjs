@@ -149,7 +149,7 @@ try {
   // known-safe, never silently accepted.
   {
     const defs = resolveConfig({ file: path.join(TMP, 'nope.json'), env: {} }).values;
-    eq('STALE_SESSION_MS defaults to 24h (owner-set, n=13 confirmed)', defs.STALE_SESSION_MS, 24 * 60 * 60 * 1000);
+    eq('STALE_SESSION_MS defaults to 24h (n=13 confirmed)', defs.STALE_SESSION_MS, 24 * 60 * 60 * 1000);
     eq('RESIDUAL_FLOOR_CHARS defaults to 2000 (n=13: cuts nothing observed)', defs.RESIDUAL_FLOOR_CHARS, 2_000);
     eq('SWEEP_DEBOUNCE_MS defaults to 10 min', defs.SWEEP_DEBOUNCE_MS, 600_000);
   }

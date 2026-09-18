@@ -110,8 +110,8 @@ console.log('\ndone');
 // nothing exercises.
 //
 // What it guards cannot be caught any other way: the sweep's cost is bounded by
-// `if (!s.transcriptPath) continue`, an invariant in ANOTHER FILE that a PM cold review already
-// caught one change away from inverting. The cap does not prevent that regression; it makes it
+// `if (!s.transcriptPath) continue`, an invariant in ANOTHER FILE that is
+// one change away from inverting. The cap does not prevent that regression; it makes it
 // DEGRADE rather than compound. So the test is about the cap firing AND saying so.
 // ─────────────────────────────────────────────────────────────────────────────
 console.log('\n=== the enumeration cap ===');
@@ -161,8 +161,8 @@ console.log('\n=== the cap counts MEASURABLE sessions, not state files ===');
    *
    * A phantom (no `transcriptPath` — a session that never reached a Stop with one) is discarded by
    * the loop for the cost of one small JSON parse. The old cap was applied to the FILE list one
-   * step before that discard, so phantoms ate the budget: measured on the owner's machine
-   * 2026-08-01, 1,969 of 2,000 slots went to files thrown away immediately, and only 31 of 61 real
+   * step before that discard, so phantoms ate the budget: measured,
+   * 1,969 of 2,000 slots went to files thrown away immediately, and only 31 of 61 real
    * sessions were enumerated. The cap could never stop firing either — the reaper deliberately
    * keeps a phantom 7 days and the machine mints ~368/day, so the population sits permanently
    * above any file cap.

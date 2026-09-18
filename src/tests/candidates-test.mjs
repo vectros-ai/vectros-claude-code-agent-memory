@@ -35,7 +35,7 @@ const { verdictMutationsOffFile } = await import('../paths.mjs');
  * THIS FILE OPTS IN TO VERDICT MUTATIONS, and it is the one file that may.
  *
  * `isolate.mjs` writes a `VERDICT_MUTATIONS_OFF` marker into every isolated root so no test can
- * PATCH the owner's real store via `settle`/`reopen`/`markSuperseded` (credentials are deliberately
+ * PATCH the real store via `settle`/`reopen`/`markSuperseded` (credentials are deliberately
  * not isolated). This file exercises those functions directly, and does so exclusively through an
  * INJECTED fake transport (`fetchImpl` on every call below) — nothing here can reach a network
  * whatever the marker says. Mirrors `spool-test.mjs`'s own `SPOOL_OFF` opt-in exactly.
@@ -79,6 +79,11 @@ console.log('\n=== 1. request shapes (the silent-failure class) ===');
   check('create sends `payload` — NOT `data` (a `data` key returns 200 and stores nothing)',
     !!b.payload && b.data === undefined, JSON.stringify(Object.keys(b)));
   eq('a new proposal starts pending', b.payload.disposition, 'pending');
+  // The field the README documents as part of the automatic transmission — nothing previously
+  // asserted it actually reaches the wire, only that it round-trips on READ (see § "field
+  // census" below). A regression dropping or corrupting it on WRITE would have passed every
+  // test in this file.
+  eq('the session id is actually sent, not just carried on read-back', b.payload.sessionId, 'sid-1');
   check('create upserts, so a retry cannot duplicate', f.calls[0].url.includes('upsert=true'));
 }
 {

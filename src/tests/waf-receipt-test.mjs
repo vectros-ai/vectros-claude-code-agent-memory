@@ -119,7 +119,7 @@ console.log('\n=== 2. recall.mjs: a plain 413 (no WAF headers) still gets the wi
 
 /**
  * #3 — recall-eval-worker.mjs. Sections 1-2 above only ever exercised recall.mjs, despite this
- * file's own header claiming both — a real gap (testing-adequacy review finding, 2026-07-22): the
+ * file's own header claiming both — a real testing-adequacy gap: the
  * identical widened-receipt code landed in BOTH files' search(), and only one had a test. Direct
  * import (not a full worker spawn, which needs a real transcript + a real `claude -p` call to reach
  * search() at all) exercises exactly the code that changed, at the right scope.

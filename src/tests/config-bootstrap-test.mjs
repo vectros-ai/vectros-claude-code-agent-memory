@@ -196,7 +196,7 @@ console.log('\n=== 1c. census: atomic.mjs binds its bootstrap-reachable helpers 
 
   /**
    * ── AND WHAT THOSE BODIES *READ*, not only how they are declared. This is the gap that let the
-   * real defect through (PM cold pass, 2026-07-30).
+   * real defect through.
    *
    * The check above enforces DECLARATION FORM. The rule this module's header actually states is
    * broader: *"ANY binding reachable from a function this module exports must be hoisted."* A

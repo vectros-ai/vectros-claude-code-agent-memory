@@ -3,7 +3,7 @@
  * RED-PROOF: `report.mjs`'s `foldQueues()` — specifically the `autoIgnoredCap` tally added
  * alongside the orphan-cap backstop. Report.mjs had NO test coverage at all before this file
  * (a pre-existing gap this doesn't try to close in full — only the new counting logic this branch
- * actually added, which had zero verification of its own per review).
+ * actually added, which had zero verification of its own).
  *
  * Each check below is written so a real regression in the counting logic — double-counting against
  * `ignored`, counting a HUMAN ignore as auto, or missing a real auto-ignore — would fail it, not
@@ -55,7 +55,7 @@ console.log('\n=== a ref that merely CONTAINS "orphan-cap" but does not START WI
   append(SID2, { op: 'propose', id: 'c1', externalId: 'y1', title: 'a human citing an orphan-cap doc', body: 'b', kind: 'observation' });
   // A human's own `ignored:covered:` citation happens to mention "orphan-cap" in its path — this
   // must not be mistaken for the auto backstop's own ref shape (`startsWith`, not a bare `includes`).
-  append(SID2, { op: 'dispose', id: 'c1', disposition: 'ignored', ref: 'covered:docs/development/gotchas/orphan-cap-quirks.md' });
+  append(SID2, { op: 'dispose', id: 'c1', disposition: 'ignored', ref: 'covered:notes/orphan-cap-quirks.md' });
 
   const d = foldQueues();
   // Cumulative with the SID above (foldQueues scans the whole queue dir) — assert the DELTA a

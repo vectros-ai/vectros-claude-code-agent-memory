@@ -12,7 +12,7 @@
  * spans a process spawn, and another session may have settled the candidate in between. Same
  * reasoning as `reap.mjs`'s re-check immediately before unlinking.
  *
- * ⚠ THAT RE-CHECK USED TO STOP AT THE PLAN, AND THAT WAS A REAL BUG (review finding, 2026-08-14):
+ * ⚠ THAT RE-CHECK USED TO STOP AT THE PLAN, AND THAT WAS A REAL BUG:
  * `planOrphanCap`'s "pending" list is derived from the LOCAL FILE, which can lag the RECORD —
  * `dispose.mjs`'s own file backup is documented best-effort and can fail, and even when it
  * succeeds the record write always lands first. So a human genuinely disposing a candidate for
@@ -32,7 +32,7 @@
  * component here that writes an unattended disposition must honour the switch on EVERY path that
  * reaches it, not just the common one.
  *
- * A LOCK IS CLAIMED HERE TOO, FOR THE SAME REASON (review finding, 2026-08-14, PLAUSIBLE — two
+ * A LOCK IS CLAIMED HERE TOO, FOR THE SAME REASON — two
  * near-simultaneous Stop events from two live sessions could both read `orphanCapDue()` as true
  * before either restamps the debounce marker, and both spawn a worker). Rather than thread lock
  * ownership across a process spawn (the worker would have to trust a fact only the parent
@@ -73,11 +73,12 @@ const reasonFor = (why) => `${why} — auto-ignored by the orphan-cap backstop; 
  * means unreachable this run — every candidate in the queue is treated as `failed` (retried next
  * debounced run), never as "still pending" by default: silence must never read as permission.
  *
- * A MAP, NOT A SET OF "STILL PENDING" IDS — a candidate absent from the map (no record at all,
- * `writeoff.mjs`'s population, not this worker's) and a candidate PRESENT but already settled by
- * someone else are different facts and must be counted differently (`missing` vs `alreadySettled`
- * below); collapsing them to one boolean was caught in review as a real diagnostic regression —
- * both are safe (neither ever gets overwritten), but only one of them means "check writeoff.mjs".
+ * A MAP, NOT A SET OF "STILL PENDING" IDS — a candidate absent from the map (no record at all: it
+ * predates the file-to-record dual-write cutover, so closing it needs a one-time migration outside
+ * this worker's own reach) and a candidate PRESENT but already settled by someone else are
+ * different facts and must be counted differently (`missing` vs `alreadySettled` below);
+ * collapsing them to one boolean is a real diagnostic regression — both are safe (neither ever
+ * gets overwritten), but only one of them means "this candidate needs that one-time migration".
  */
 async function currentlyPending(sid) {
   const rows = await bySession(sid);
@@ -162,9 +163,9 @@ async function run(apply, triggeringSid) {
     const fresh = await currentlyPending(q.sid);
     if (fresh === null) { failed += q.pending.length; continue; } // unreachable — retried next debounced run
     for (const c of q.pending) {
-      if (!c.externalId) { missing++; continue; } // predates dual-write — not this worker's population (writeoff.mjs's)
+      if (!c.externalId) { missing++; continue; } // predates dual-write — needs a one-time migration, outside this worker's reach
       const rec = fresh.get(c.externalId);
-      if (!rec) { missing++; continue; } // no record at all for this externalId — writeoff.mjs's population, not this worker's
+      if (!rec) { missing++; continue; } // no record at all for this externalId — same pre-dual-write population, not this worker's
       if (rec.disposition !== 'pending' || rec.supersededBy) { alreadySettled++; continue; } // a human (or a concurrent run) already resolved this — never overwrite
       const r = await settleByExternalId(c.externalId, 'ignored', { ref: REF, resolved: reasonFor(q.why) });
       if (r === null) { failed++; continue; } // unreachable — retried next debounced run, nothing lost

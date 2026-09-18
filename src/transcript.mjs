@@ -2,7 +2,7 @@
  * Neutralize the prompt delimiters inside untrusted text before it is interpolated into a nested
  * model's prompt. → capture-worker.mjs, recall-eval-worker.mjs.
  *
- * WHY (2026-07-16, security review). Every nested prompt is assembled by raw interpolation:
+ * WHY. Every nested prompt is assembled by raw interpolation:
  *
  *     `<transcript_delta>\n${deltaText}\n</transcript_delta>`
  *
@@ -103,7 +103,7 @@ export function transcriptLength(transcriptPath) {
  * exactly once across a session. Whole-arc-per-call is quadratic — measured 3.5x the delta at 1x
  * session length, 15.3x at 4x, i.e. it degrades precisely as sessions get long.
  *
- * IT SLICES FORWARD, AND `to` IS THE CONTRACT (revised 2026-07-16).
+ * IT SLICES FORWARD, AND `to` IS THE CONTRACT.
  *
  * This used to keep the most-recent `maxChars` (`text.slice(-maxChars)`) and let the caller mark the
  * whole delta captured — so whenever the cap bound, the HEAD of the delta fell below the watermark

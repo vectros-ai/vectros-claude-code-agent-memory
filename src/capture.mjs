@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Stop / PreCompact hook — capture trigger (agent-memory flagship dogfood).
+ * Stop / PreCompact hook — capture trigger.
  *
  * Capture is INVOLUNTARY (delegated to local inference, not the agent's discipline).
  * This thin hook fires at a turn/session boundary and
@@ -13,7 +13,7 @@
  * The old "soak the dry-run, then flip to live writes (MCP-backed reconcile)" follow-on is
  * DEAD — the soak killed it. See capture-worker.mjs for why.
  *
- * RE-ENTRANCE GUARD: no-op inside the R2 evaluator's own nested `claude -p`.
+ * RE-ENTRANCE GUARD: no-op inside the mid-run evaluator's own nested `claude -p`.
  * Emits nothing; never blocks. Self-contained. Fail-open.
  */
 import path from 'node:path';
@@ -42,7 +42,7 @@ const ORPHAN_CAP_WORKER = path.join(HERE, 'orphan-cap-worker.mjs'); // same reas
 const API_KEY = cred('VECTROS_API_KEY');
 
 /**
- * THE GATE IS CONTENT, NOT TIME (revised 2026-07-16).
+ * THE GATE IS CONTENT, NOT TIME.
  *
  * It was `DEBOUNCE_MS = 90_000`. A time debounce is uncorrelated with what the session actually
  * produced, so it was wrong in BOTH directions at once. Measured on one real session:
@@ -62,7 +62,7 @@ const API_KEY = cred('VECTROS_API_KEY');
  * could never bind, and the delta gate was doing the work it was thanked for. Removed rather than
  * left as a knob a future engineer would tune and observe no effect from.)
  *
- * THE TAIL GAP IS CLOSED BY THE SWEEP, NOT BY THIS GATE (2026-07-20) — and the division of
+ * THE TAIL GAP IS CLOSED BY THE SWEEP, NOT BY THIS GATE — and the division of
  * labour is the design. This gate still ignores the tail on purpose: anything under 100K when a
  * session ends is not captured HERE, because "the session ended" is exactly what a single Stop
  * cannot tell us, and a low-water mark small enough to catch the tail fires constantly mid-session.
@@ -106,7 +106,7 @@ async function main() {
 
   /**
    * The PreCompact boundary is marked BEFORE the API-key check, and state is read as LATE as
-   * possible. Two review findings:
+   * possible. Two defects, closed here:
    *
    * (1) `if (!API_KEY) return` used to sit above this, so with no Vectros credential a compacted
    *     session silently never oriented — even though marking the boundary needs no credential at
@@ -150,7 +150,7 @@ async function main() {
    * documents fixing exactly that defect for the PreCompact marker ~140 lines up ("`if (!API_KEY)
    * return` used to sit above this, so with no Vectros credential a compacted session silently never
    * oriented — even though marking the boundary needs no credential at all"). Same shape, same file,
-   * caught by the PM cold pass rather than by me.
+   * caught only afterward.
    *
    * OUTSIDE the `WORKERS_OFF` branch, because that switch is documented as the kill switch for the
    * nested-INFERENCE workers and the reaper bills nothing — so stopping spend must not silently stop
@@ -162,7 +162,7 @@ async function main() {
    * only irreversible component in the tree had no off switch while a comment asserted otherwise,
    * which is the one place a false claim gets ACTED ON (an operator reads it at 2am). Now:
    * `touch ~/.claude/vectros-memory/REAP_OFF`, or `VECTROS_MEM_REAP_OFF=1` for a child that must
-   * not delete. → `reap.mjs` § reapDisabled. (PM cold pass, 2026-07-30.)
+   * not delete. → `reap.mjs` § reapDisabled.
    *
    * Its own try/catch, not folded into the sweep's: a shared handler would report a reaper failure as
    * `tail sweep FAILED`, a receipt naming the wrong subject — the defect `lock.mjs`'s `release` was
@@ -254,7 +254,7 @@ async function main() {
   const delta = total - q.offset;
 
   /**
-   * IN-FLIGHT LOCK + fail-closed queue read. Two review findings, one guard.
+   * IN-FLIGHT LOCK + fail-closed queue read. Two defects, one guard.
    *
    * (1) A corrupt queue read reports `offset: 0`, so `delta` would be the WHOLE arc and the gate
    *     would open on a lie. Refuse.
@@ -301,8 +301,8 @@ async function main() {
    *
    * This returned silently — and it is the COMMON path: most Stops are under the gate. So the
    * busiest decision in the system left no trace, and "the gate is working" was indistinguishable
-   * from "capture.mjs is dead", which is the precise ambiguity hooklog.mjs exists to remove. A cold
-   * a panel censused this discipline at 1 of 6 sites; the smoke test's new "did the hook write a log line?" check
+   * from "capture.mjs is dead", which is the precise ambiguity hooklog.mjs exists to remove. This
+   * discipline was censused at 1 of 6 sites; the smoke test's new "did the hook write a log line?" check
    * then caught this one independently on its first run.
    *
    * One line per Stop is affordable now that the log ROLLS instead of trimming, and it is the line
@@ -467,8 +467,8 @@ async function main() {
   }
 
   // DETACHED, never inline. This was an inline `await refreshPinnedBlock()` on the reasoning
-  // that "Stop has a 600s budget so inline is fine" — wrong thinking. MEASURED 2026-07-15: the
-  // projection costs ~1.8s, dominated by a COLD TLS handshake (~1.3s first call vs ~220ms warm)
+  // that "Stop has a 600s budget so inline is fine" — wrong thinking. The projection costs ~1.8s,
+  // dominated by a COLD TLS handshake (~1.3s first call vs ~220ms warm)
   // because every hook is a fresh process that never reuses a connection. That made this hook
   // take ~4s to exit, on EVERY PreCompact (the user's compaction path) and on every 10-minute
   // Stop. A generous budget is not a licence to block the user: the projection is a CACHE

@@ -1,15 +1,15 @@
 /**
  * Hook observability — one line per invocation, to `~/.claude/vectros-memory/hooks.log`.
  *
- * WHY THIS EXISTS (learned the hard way, 2026-07-15): every hook here is deliberately
+ * WHY THIS EXISTS: every hook here is deliberately
  * FAIL-OPEN — any error, timeout, or missing config degrades to "inject nothing" so a broken
  * hook can never break a turn. That is the right behavior and it has a brutal corollary:
  *
  *     "never fired", "fired and no-op'd", and "fired and errored" are INDISTINGUISHABLE.
  *
  * `recall.mjs` read `input.user_prompt` when the payload field is `prompt`, so it returned at
- * line 1 of every real invocation. It was wired, deployed, and silently dead — and the owner
- * noticed before the instrumentation did, because there WAS no instrumentation. Every test fed
+ * line 1 of every real invocation. It was wired, deployed, and silently dead — noticed only by
+ * reading the log, because there WAS no instrumentation to catch it. Every test fed
  * it synthetic stdin carrying `user_prompt`, so the tests confirmed the assumption rather than
  * the contract.
  *
@@ -62,7 +62,7 @@ export function logPath() {
 // imports `hlog` from this file, so during the cycle's bootstrap `reportConfig` calls `hlog`, which
 // calls this. A module-scope `const` would be in the dead zone: the throw lands in hlog's own inner
 // catch, the roll check is silently skipped, and the comment there claims the only case is "no log
-// yet". (PM cold pass, 2026-07-30.)
+// yet".
 function maxBytes() { return tunables().HOOKLOG_MAX_BYTES; }
 
 /**
@@ -71,7 +71,7 @@ function maxBytes() { return tunables().HOOKLOG_MAX_BYTES; }
  * The APPEND is safe: a sub-4KB write to a file opened O_APPEND is atomic, which matters
  * because this log is shared by every hook in every session (~2/min of session churn alone).
  *
- * The ROTATION was NOT (fixed 2026-07-16). It was read -> `writeFileSync` — truncate-in-place
+ * The ROTATION was NOT. It was read -> `writeFileSync` — truncate-in-place
  * on the most contended file we have, so concurrent rotations would interleave and shred the
  * log. It had never fired only because the log sits under the roll threshold; it was a landmine with a
  * size fuse, on the one instrument that tells us whether any hook works at all. → `atomic.mjs`.

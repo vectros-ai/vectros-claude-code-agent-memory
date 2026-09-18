@@ -4,8 +4,8 @@
  *
  * WHY THIS EXISTS. The lock carries the concurrency invariant for the whole capture path and had
  * ZERO tests, because it was ~25 lines inline in a hook that runs `main()` on import: exercising it
- * meant standing up a 100K transcript and a real spawn. So it was never exercised, and the review
- * that found the bug found it by READING. Extracting it to `lock.mjs` is what made these five cases
+ * meant standing up a 100K transcript and a real spawn. So it was never exercised, and the bug
+ * that was there was found by READING. Extracting it to `lock.mjs` is what made these five cases
  * expressible; that is the whole reason for the seam.
  *
  * WHAT IT NO LONGER PROTECTS, and read this before valuing any of it. The lock existed because a
@@ -18,13 +18,12 @@
  *
  * THE `owned` SPLIT — hygiene, and honest about it. `claimed` answered both "may I spawn?" and "do
  * I hold the lock?"; on a non-EEXIST claim failure it was set true (a deliberate fail-open) and
- * that same true authorized `unlinkSync`, releasing a lock this process never took. The review
- * justified it as a live Windows hazard and I repeated that as fact. **Neither of us measured it,
- * and this file still does not** — see 4c, which states the case UNMEASURED and says why `node:fs`
- * cannot reach it. (This paragraph previously claimed 4c "refutes it — with a real second process
- * and a real open handle". It did not: that was written for a harness that has since been deleted
- * for proving nothing, and the sentence outlived it by one commit. Same disease, one level up: a
- * header asserting a measurement its own file does not contain.) The split is kept because it costs
+ * that same true authorized `unlinkSync`, releasing a lock this process never took. This is
+ * justified as a live Windows hazard, but **that has never actually been measured, and this file
+ * still does not measure it** — see 4c, which states the case UNMEASURED and says why `node:fs`
+ * cannot reach it. (A header asserting a measurement its own file does not contain is exactly the
+ * failure mode 4c below exists to call out — this paragraph is not exempt from that standard just
+ * because it names it.) The split is kept because it costs
  * one variable and the two facts differ; whether its trigger is reachable is OPEN. The real defect
  * on that path was silence.
  *
@@ -84,7 +83,7 @@ eq('an already-gone lock is RELEASED, not failed — absent IS the goal state', 
 
 /**
  * `check('the three states are distinct', new Set(['not-ours','released','failed']).size === 3)`
- * stood here. It is a fact about three string literals I typed on that line: it never calls
+ * stood here. It is a fact about three hardcoded string literals: it never calls
  * `release`, never imports a thing, and passes if the module is deleted. A tautology wearing a
  * test's clothes — and it was standing in for the ONE state this file never produced, the state
  * `lock.mjs`'s own header calls *"we wedged capture for 30 minutes and nobody knows"*.
@@ -104,13 +103,12 @@ eq("THE STATE NOTHING ELSE PRODUCES: an owned lock we could not free reports 'fa
  * ─────────────────────────────────────────────────────────────────────────────
  * 4. WHAT `wx` ACTUALLY RAISES — the evidence, and the boundary of it.
  *
- * The review said a `wx` claim against a file another process holds OPEN can raise EPERM/EBUSY
- * rather than EEXIST. I "refuted" it with a blanket claim and a table that listed the held-open row
- * as measured. **It was not.** `claim()` writes via `writeFileSync`, which opens AND closes, so no
- * handle was ever held; a later draft added a second-Node-process harness, which cannot produce a
- * sharing violation either (libuv opens FILE_SHARE_READ|WRITE|DELETE) and was deleted for proving
- * nothing. This block asserted that table for one commit after the harness that "proved" it was
- * gone — the same disease one level up.
+ * A `wx` claim against a file another process holds OPEN can, in principle, raise EPERM/EBUSY
+ * rather than EEXIST. That claim is easy to assert and hard to actually measure: `claim()` writes
+ * via `writeFileSync`, which opens AND closes, so no handle is ever held by THIS process's own
+ * claim; a second-Node-process harness cannot produce a sharing violation either (libuv opens
+ * FILE_SHARE_READ|WRITE|DELETE). A table that lists the held-open row as measured, without either
+ * of those actually producing the condition, is asserting a measurement the test does not contain.
  *
  * MEASURED here, and this is all of it:
  *   4a  wx vs. an existing CLOSED file ....... EEXIST
@@ -146,10 +144,10 @@ release(L4, true, SID);
  * 4c — THE DISPUTED CASE, and the only one that was ever in question: ANOTHER PROCESS, holding a
  * REAL OPEN HANDLE.
  *
- * This is the whole finding. 4a/4b measure a closed file in one process — which is why an earlier
- * draft of this file could "refute" the review while containing no measurement of the thing under
- * review, and a golden doc then cited it as proof. A test that pins the undisputed case and reports
- * a verdict on the disputed one is worse than no test: it launders an assumption into a fact.
+ * This is the whole finding. 4a/4b measure only a closed file in one process — asserting that as a
+ * measurement of the held-open case would be exactly the trap this file warns against elsewhere.
+ * A test that pins the undisputed case and reports a verdict on the disputed one is worse than no
+ * test: it launders an assumption into a fact.
  *
  * So: spawn a child, have it hold the handle open, and ask while it is still holding.
  */
@@ -161,8 +159,7 @@ release(L4, true, SID);
  * FILE_SHARE_READ|WRITE|DELETE, so a second NODE process cannot produce a sharing violation — the
  * probe could only ever return the answer it assumed. A check that cannot fail is not evidence, and
  * dressing one as a measurement of the contested case is worse than leaving the case open: it
- * closes the question in the reader's mind while observing nothing. That was the SIXTH instance of
- * this branch's own disease, added in the fix for the fifth, by the author who named it.
+ * closes the question in the reader's mind while observing nothing.
  *
  * The realistic producers — a NON-Node holder (AV, indexer, backup) opening FILE_SHARE_NONE, or
  * delete-pending state (`unlink` while another handle is open) — are unreachable from `node:fs`.

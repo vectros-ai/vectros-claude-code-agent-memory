@@ -79,8 +79,8 @@ const field = (v, max = NUDGE_FIELD_MAX_CHARS) => String(v ?? '').replace(/\s+/g
  *   WORST CASE  ~315c per candidate — every field simultaneously at its cap (title + body + the
  *               three `field()`-capped values). An uncapped list crosses the 9500c budget at ~26
  *               pending and takes the lot with it. This is what the CAP must be safe against.
- *   OBSERVED    ~223c mean (min 192, median 220, max 261) — RE-MEASURED 2026-07-29 across all 35
- *               real pending candidates on the dogfood machine, putting the actual cliff at ~42.
+ *   OBSERVED    ~223c mean (min 192, median 220, max 261) — RE-MEASURED across all 35
+ *               real pending candidates, putting the actual cliff at ~42.
  *               This is what the current headroom is.
  * `config.mjs`'s `NUDGE_MAX` note carries the same pair; if you change one, change both.
  * `NUDGE_ORPHAN_MAX` already carried this reasoning; the ORDINARY nudge — which fires far more
@@ -97,7 +97,7 @@ const field = (v, max = NUDGE_FIELD_MAX_CHARS) => String(v ?? '').replace(/\s+/g
 /**
  * A stable signature of the pending set — the nudge fires only when this changes.
  *
- * `c.ordinal ?? c.id`, not `c.id` alone (as of 2026-08-14, B2): the OWN-session nudge now reads
+ * `c.ordinal ?? c.id`, not `c.id` alone: the OWN-session nudge now reads
  * records, whose `.id` is the real record uuid and whose `.ordinal` is the address (`c1`, `c2`,
  * ...) — the file-shaped orphan nudge still has only `.id`, so the fallback keeps both callers
  * correct without either needing to know which shape it's holding. Either field is unique and
@@ -125,7 +125,7 @@ export function renderNudge(pending, sessionId) {
   ];
   for (const c of shown) {
     /**
-     * CAP AND COLLAPSE THE TITLE TOO (fixed 2026-07-16, cold panel).
+     * CAP AND COLLAPSE THE TITLE TOO.
      *
      * `body` got both treatments; `title` — rendered on the same line, from the same
      * model-authored JSON — got neither. A newline in a distiller title breaks out of its bullet
@@ -140,7 +140,7 @@ export function renderNudge(pending, sessionId) {
      */
     const title = field(c.title || '(untitled)', NUDGE_TITLE_MAX_CHARS);
     const body = String(c.body || '').replace(/\s+/g, ' ').trim();
-    // `c.ordinal ?? c.id` — see pendingSig's header (B2, 2026-08-14): this candidate is
+    // `c.ordinal ?? c.id` — see pendingSig's header: this candidate is
     // record-shaped now, and `.ordinal` (not the real record `.id`) is the address the reader
     // types into dispose.mjs.
     lines.push(
@@ -157,7 +157,7 @@ export function renderNudge(pending, sessionId) {
      * TWO QUESTIONS, NOT ONE — and the second used to be missing entirely.
      *
      * This block said "verify the claim against the repo", which sounds sufficient and is not: a
-     * DOC is in the repo. On 2026-07-20 a PM session did exactly that, checked two repo docs, and
+     * DOC is in the repo. A settling session once did exactly that, checked two repo docs, and
      * disposed a TRUE candidate as `ignored:PREMISE IS FALSE` — because both docs were STALE. It
      * verified against a description of the system instead of the system.
      *
@@ -238,10 +238,10 @@ export function renderOrphanNudge(orphan, ageHours) {
   /**
    * THE OPENING LINE USED TO READ "THIS IS NOT YOUR SESSION'S WORK", AND THAT WAS THE BUG.
    *
-   * Owner, 2026-07-21, after watching the first four hours of real sweeps: *"every session wants to
-   * defer disposition until I force the issue. Orphaned memories are a shared responsibility and
-   * there is not some other session better positioned to dispose of them."* Every settlement on this
-   * machine so far happened because the owner argued for it against the agent's default inclination.
+   * Observed over real sweeps: every session wants to defer disposition until something forces the
+   * issue. Orphaned memories are a shared responsibility, and there is no other session better
+   * positioned to dispose of them — every real settlement observed happened only when that case was
+   * argued explicitly, against the agent's default inclination to defer.
    *
    * The prompt was arguing the other side. It opened by telling the reader this was NOT their work —
    * a licence to defer, in the first clause, where it carries the most weight — and then contradicted
@@ -286,7 +286,7 @@ export function renderOrphanNudge(orphan, ageHours) {
       'recollection of the session, only against the artifacts.',
     // THE SAME TWO RULES AS THE ORDINARY NUDGE, and this block needs them MORE. Its reader was not in
     // the session, so a stale doc is the only thing they have to be misled by. The first version said
-    // 'verify the claim' and 'against the repo' — verbatim the wording the 2026-07-20 incident proved
+    // 'verify the claim' and 'against the repo' — verbatim the wording already proved
     // insufficient — and mentioned neither the cited-ignore form nor the undo. The population most
     // likely to dismiss a true candidate had been given the weakest rules.
     '  1. IS IT TRUE?  Verify against the DECIDING ARTIFACT — the config, the code, or the live state that ' +

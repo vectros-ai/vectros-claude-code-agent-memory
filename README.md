@@ -18,7 +18,14 @@ without ever writing to your knowledge base on their own:
   re-evaluates after tool calls using a small nested Claude call (Haiku by default) to catch
   recall opportunities the first pass's plain search misses.
 - **Capture.** When a session accumulates enough new transcript, a background worker distills
-  candidate lessons out of it — durable facts, decisions, gotchas — and proposes them.
+  candidate lessons out of it — durable facts, decisions, gotchas — and **automatically POSTs each
+  one to your Vectros store** as an unreviewed `candidate` record. This transmission happens
+  without asking first, and the record carries real content: a title, a body, a category, which
+  session it came from, and — when the distiller found one — a suggested destination (memory vs.
+  documentation), an area tag, free-text tags, or a file/doc reference it cited. Nothing filters
+  this content for sensitivity before it transmits, so a candidate can echo a secret, an
+  identifier, or other sensitive transcript content verbatim — that gap is tracked as its own
+  follow-up. What it does NOT do is make that content recallable — see Disposition below.
 - **Disposition — you decide, always.** A captured candidate is *never* written into your live
   knowledge base automatically. It sits in a review queue until you (or the agent, with the right
   tool access — see "Recommended, not required" below) explicitly disposes of it: point it at a
@@ -172,7 +179,15 @@ claude-code-agent-memory <command>
 Env:
   VECTROS_MEMORY_HOME   where the runtime deploys (default: <claude config dir>/vectros-memory)
   CLAUDE_CONFIG_DIR     Claude Code's own config dir (default: ~/.claude)
-  VECTROS_API_BASE_URL  override the Vectros API base (default: https://api.vectros.ai)
+  VECTROS_API_BASE_URL  override the Vectros API base (default: https://api.vectros.ai).
+                        Validated before every hook fetch attaches your credential: must be
+                        an official vectros.ai/*.vectros.ai host (or http:// to localhost). An
+                        untrusted value is refused and falls back to the default rather than
+                        being used — it is never silently sent to the wrong place.
+  VECTROS_ALLOW_INSECURE_BASE_URL
+                        set 1 to bypass that check for a trusted local proxy — logs a loud
+                        warning every time it's used. Not recommended: it sends your key and
+                        prompt text to whatever host VECTROS_API_BASE_URL names, unvalidated.
   VECTROS_KEYRING_ALIAS pick a specific @vectros-ai/cli identity alias explicitly — beats both
                         the pin `init` wrote and the CLI's ambient active identity
 ```

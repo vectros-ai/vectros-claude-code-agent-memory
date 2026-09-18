@@ -129,7 +129,7 @@ console.log('\n=== 2. settings.json wiring is correct and idempotent ===');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 3. an UPGRADE that adds a file to an event already partially wired must add the NEW command,
-//    not skip the whole event (found by an independent review agent tracing this exact scenario).
+//    not skip the whole event.
 // ─────────────────────────────────────────────────────────────────────────────
 console.log('\n=== 3. a partially-wired event gains the missing command on re-init ===');
 {
@@ -163,7 +163,7 @@ console.log('\n=== 3. a partially-wired event gains the missing command on re-in
 // named `vectros<ext>` to exist, and `keyring list --json`'s only contract this code reads is
 // the `active` field — so a tiny wrapper is enough, no real keyring involved.
 //
-// FOUND against the REAL CLI (PM cold pass, this MR): this fake used to accept ANY flags after
+// FOUND against the REAL CLI: this fake used to accept ANY flags after
 // `keyring list`/`keyring show`, which is exactly how `resolveActiveKeyringAlias()` calling
 // `keyring list --format json` — a flag the real CLI's `keyring list` has never supported, only
 // its sibling `keyring show` does — passed this whole suite while silently finding nothing to pin

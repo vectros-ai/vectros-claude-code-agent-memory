@@ -4,7 +4,7 @@
  *
  * WHY A RUNNER EXISTS AT ALL. Before this, "the tests pass" meant a human ran eight files by hand
  * and read the prose. There was no runner and no `package.json`, so even the files that DID assert
- * depended on someone checking `$?`. A cold panel put it exactly: the suite was green by
+ * depended on someone checking `$?`. That is exactly it: the suite was green by
  * construction, and `assert.mjs` — *the countermeasure to that very disease* — was wired into 2 of
  * 9 files. Its own header diagnosed the problem and it was then applied only where the problem was
  * found. That is the branch's systemic defect, reproduced inside the fix for it.
@@ -57,7 +57,7 @@ console.log(`(test hooks.log redirected to ${process.env.VECTROS_HOOKLOG_PATH})`
  * DEFAULT PATH ISOLATION — no spawned test file can reach the real, machine-wide `vectros` CLI
  * unless explicitly opted in (the SAME `withReal` gate `*-real-test.mjs` already uses).
  *
- * Found live, 2026-08-17: a routine `npm test` (no opt-in) still let every spawned hook reach the
+ * Found live: a routine `npm test` (no opt-in) still let every spawned hook reach the
  * REAL `vectros` binary — `resolveCommandPath('vectros')`/`runKeyringHelper()` in `creds.mjs` walk
  * the inherited PATH with no isolation of their own, and until this fix no spawn site here ever
  * overrode it. `smoke.mjs` is IN this suite (not a `*-real-test.mjs`), and its own hook spawns
@@ -65,7 +65,7 @@ console.log(`(test hooks.log redirected to ${process.env.VECTROS_HOOKLOG_PATH})`
  * as a side effect of an ordinary test run — the exact class of incident `creds-keyring-test.mjs`
  * case 4 already documents and fixed for the OAuth-token keychain path (a routine `npm test`
  * silently touching a real, machine-wide credential), just never closed for this one. It is not only
- * a blast-radius concern either: `packages/cli/src/keyring.ts` documents `keyring show` as a
+ * a blast-radius concern either: a sibling package's CLI documents `keyring show` as a
  * lock-TAKING writer on the shared `~/.vectros/keyring.json` (migrate-on-use), so an unisolated test
  * run can race a real concurrent session's own credential resolution against that same cross-process
  * lock — plausibly what produced a transient TEST-tenant misread on a real invocation the same
@@ -138,7 +138,7 @@ for (const f of fs.readdirSync(HERE).filter((x) => x.endsWith('-test.mjs') || x 
  * while authoring the very feature this census now guards). The rule is now mechanical
  * instead of remembered — same rationale as the failure-reporting census above.
  *
- * MATCHES OUTSIDE COMMENTS ONLY — found in review, not by a test. The first cut grepped the whole
+ * MATCHES OUTSIDE COMMENTS ONLY — not caught by a test. The first cut grepped the whole
  * file text for the literal string `VECTROS_HOOK_CREDENTIALS`, satisfied by a COMMENT mentioning
  * it (the explanatory comment right above the real override, for instance) just as readily as the
  * actual override — so deleting the one line that matters while leaving the comment above it
@@ -150,8 +150,8 @@ console.log('\n=== census: does every cli.mjs-spawning test override VECTROS_HOO
  * Strip line comments and block comments — good enough for a census that only needs to see LIVE
  * code, not a full parser.
  *
- * ONE REGEX, string literals and comments as ALTERNATIVES, not two sequential passes — found in
- * review (a real bug, not a hypothetical, and — worth naming since it is exactly the trap this
+ * ONE REGEX, string literals and comments as ALTERNATIVES, not two sequential passes — a real
+ * bug, not a hypothetical, and (worth naming since it is exactly the trap this
  * paragraph is about — a SECOND instance of it was written into THIS very docblock on the first
  * attempt at this fix, closing the comment early and syntax-erroring the whole file the moment it
  * ran; described here only in prose for that reason, never as the literal three-character

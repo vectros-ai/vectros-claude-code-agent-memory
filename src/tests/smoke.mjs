@@ -67,9 +67,9 @@ if (!hadOff) fs.writeFileSync(OFF, 'smoke test\n');
  * `tests/reap-test.mjs` § "smoke must not delete" spawns capture.mjs exactly as this file does and
  * checks the state count is unchanged with a reap genuinely DUE.
  *
- * (PM cold pass 2026-07-30 found the hole; the PM DELTA pass found that my first attempt at this
- * line never landed — a scripted replace silently no-op'd and printed success anyway, and the manual
- * check that "verified" it passed only because the debounce happened to be suppressing the reap.)
+ * (A silent-failure trap found here: a scripted replace can no-op and still print success, and a
+ * manual check can read as "verified" only because the debounce happened to be suppressing the
+ * reap — worth stating explicitly so a future edit to this line is actually checked, not assumed.)
  */
 process.env.VECTROS_MEM_REAP_OFF = '1';
 
@@ -79,12 +79,12 @@ const HOOKS = [
   ['capture.mjs', 'Stop'],
   ['evaluate.mjs', 'PostToolUse'],
   ['recall.mjs', 'UserPromptSubmit'],
-  // sessionend-probe.mjs retired 2026-07-16 — its question is answered (SessionEnd fires ~2/min,
+  // sessionend-probe.mjs retired — its question is answered (SessionEnd fires ~2/min,
   // always reason=other), so it is unwired from settings.json and deleted. Not a hook any more.
 ];
 
 /**
- * STDERR IS THE WRONG SIGNAL, and this file was built on it (fixed 2026-07-16, cold panel).
+ * STDERR IS THE WRONG SIGNAL, and this file was built on it.
  *
  * It grepped stderr for `ReferenceError|TypeError|…`. But every hook ends in
  * `main().catch(() => {})` — that is the fail-open contract — so **an error inside `main()`, which
@@ -124,7 +124,7 @@ for (const [file, event] of HOOKS) {
    * outbound call this fix does not need to take on.
    */
   const env = { ...process.env, VECTROS_RECALL_EVAL: '' };
-  if (file === 'evaluate.mjs' && !env.VECTROS_API_KEY) env.VECTROS_API_KEY = 'sk_test_smoke00000000000000000000000';
+  if (file === 'evaluate.mjs' && !env.VECTROS_API_KEY) env.VECTROS_API_KEY = 'sk_test_invalid_smoke00000000000000000';
   const r = spawnSync(process.execPath, [path.join(DIR, file)], {
     input: payload(event), encoding: 'utf8', timeout: 30000,
     env,
@@ -160,7 +160,7 @@ for (const [file, event] of HOOKS) {
    *
    * The worker ends every run with an unconditional `drainAll`, and credentials are deliberately
    * NOT isolated. So the only thing standing between a suite run and a real `POST /v1/records` with
-   * the owner's key is the `SPOOL_OFF` marker `isolate.mjs` writes. That is a property of the
+   * a real credential is the `SPOOL_OFF` marker `isolate.mjs` writes. That is a property of the
    * harness, not of any one test, and a property nothing asserts is one a refactor deletes.
    */
   check('the isolated root carries SPOOL_OFF — no test can promote to the real store',

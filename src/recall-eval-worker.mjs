@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * R2 background recall evaluator (detached worker) — agent-memory flagship dogfood.
+ * Mid-run background recall evaluator (detached worker).
  *
  * Spawned fire-and-forget by evaluate.mjs (the PostToolUse hook), off the hot path.
  * Its job: judge whether the evolving thread has a recall opportunity, and if so stage
@@ -16,7 +16,8 @@
  * DELIBERATE deviation from the design's literal "claude -p runs the search": Haiku emits
  * only the QUERY; this worker runs the search + staging as deterministic code we control.
  * That is cheaper (no MCP tool schemas loaded, no tool-call turns) and keeps the search/
- * dedup logic identical to R1 (recall.mjs). Flagged for owner review in the R2 handoff.
+ * dedup logic identical to prompt-time recall (recall.mjs) — duplicated, not shared, so the two
+ * can drift apart if one is changed without the other.
  *
  * RE-ENTRANCE: the `claude -p` child is a nested Claude that fires the same hooks. We set
  * VECTROS_RECALL_EVAL=1 on it so every hook no-ops. Fully fail-open; output is ignored.
@@ -104,8 +105,8 @@ function readTranscriptTail(p) {
 /**
  * What this session has already been shown — so triage never re-serves it.
  *
- * THE "SIXTH SITE" (re-review, 2026-07-16; three of six agents flagged it independently, with
- * file:line, and the first fix pass still walked past it).
+ * THE "SIXTH SITE" — flagged three separate times, each with file:line, and the
+ * first fix pass still walked past it.
  *
  * This hand-rolled the read that `state.mjs` exists to own: `JSON.parse(readFileSync(...))` inside
  * a `catch { return new Set(); }`, collapsing "fresh session, no file yet" (empty set CORRECT) into
@@ -146,7 +147,7 @@ function callModel(sysPromptFile, input) {
     '--strict-mcp-config',
     '--mcp-config', '{"mcpServers":{}}', // zero MCP: no vectros subprocess (orphan-safe), no tool tokens
     '--no-session-persistence',
-    // MEASURED 2026-07-14 (total context = cache_create + cache_read + input, which is
+    // Measured (total context = cache_create + cache_read + input, which is
     // cache-state independent — measuring cache_create ALONE is misleading, since a prior
     // call's cache turns it into an unmetered cache_read):
     //   no tool flags .................. 15,371   <- every built-in schema shipped
@@ -159,7 +160,7 @@ function callModel(sysPromptFile, input) {
     '--disallowed-tools',
     'Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,Task,NotebookEdit,' +
       'TodoWrite,BashOutput,KillShell,SlashCommand,ExitPlanMode,AskUserQuestion,' +
-      // Added 2026-07-16 (cold panel): every one of these is REAL TODAY and every one was absent
+      // Every one of these is REAL TODAY and every one was absent
       // — which is the proof that a name-denylist against a growing tool surface cannot hold. The
       // note above reasons "unknown names are harmless": true, and backwards. The hazard is a tool
       // that EXISTS and is not named. This list is defence-in-depth behind `--max-turns 1` and the
@@ -168,8 +169,8 @@ function callModel(sysPromptFile, input) {
       'Skill,ToolSearch,Monitor,SendMessage,TaskCreate,TaskUpdate,TaskOutput,TaskStop,TaskList,' +
       'TaskGet,EnterWorktree,ExitWorktree,EnterPlanMode,Artifact,Workflow,CronCreate,CronList,' +
       'CronDelete,RemoteTrigger,PushNotification,ListMcpResourcesTool,ReadMcpResourceTool',
-    // One judgment turn, never an agentic loop. MEASURED 2026-07-14: without this the call
-    // ran num_turns:5 and CONTINUED the transcript's work instead of judging it.
+    // One judgment turn, never an agentic loop. Without this, the call
+    // runs num_turns:5 and CONTINUES the transcript's work instead of judging it.
     '--max-turns', '1',
   ];
   const res = spawnSync(CLAUDE_BIN, args, {
@@ -214,15 +215,16 @@ function evaluateForQuery(transcriptTail) {
  * Stage 1 judged the question and then the model exited; whatever the engine returned was staged
  * UNJUDGED. That is the gap this closes, and it is not a ranking problem: **semantic search always
  * returns its top N and cannot say "I have nothing."** On a corpus miss it returns the N
- * least-unrelated documents, which look exactly like an answer — MEASURED here 2026-07-16, a
+ * least-unrelated documents, which look exactly like an answer — measured here: a
  * number-coercion query returned five accepted ADRs (metadata ingest, DDB indexing, PHI logging,
  * subprocessor flow, ownership scopes), every one real and useless. A flat top-5 has no way to
  * express "nothing", so the agent reads five confident citations and concludes the question was
  * researched.
  *
- * Why HERE and not in recall.mjs (R1): this worker is already detached and fire-and-forget, so a
- * second call costs ZERO latency on the user's path, and the 180s debounce makes it ~1 eval per 3
- * minutes (~$0.018 -> ~$0.036 per eval). R1 fires on EVERY prompt synchronously — the same call
+ * Why HERE and not in recall.mjs (prompt-time recall): this worker is already detached and
+ * fire-and-forget, so a second call costs ZERO latency on the user's path, and the 180s debounce
+ * makes it ~1 eval per 3 minutes (~$0.018 -> ~$0.036 per eval). Prompt-time recall fires on EVERY
+ * prompt synchronously — the same call
  * there would add 2-5s to every keystroke-to-response. Put judgment where the budget already is.
  *
  * Returns { keep:[id], contradiction:string|null, reason } — or null if the call failed, which the
@@ -247,7 +249,7 @@ function triageResults(transcriptTail, query, hits) {
   const keep = Array.isArray(decision.keep) ? decision.keep.filter((id) => ids.has(id)) : [];
 
   /**
-   * ENFORCE the contract the prompt states, in code (2026-07-16, security review).
+   * ENFORCE the contract the prompt states, in code.
    *
    * `recall-triage.md` promises "`contradiction`: ... Requires a kept id that supports it" — and
    * this function did not check it, so the prompt was a guard comment rather than a guard. That
@@ -352,8 +354,8 @@ async function main() {
    * transcript tail, so a steered reply is the same risk class `EVAL_CONTRADICTION_MAX_CHARS` above already
    * guards for the `contradiction` field) and it has TWO consumers: `search()` (which has its own
    * defensive clamp — the actual Vectros request boundary, kept as-is) and `triageResults()` below,
-   * which fences `query` verbatim into a SECOND local `claude -p` prompt that had no bound at all
-   * (review finding, 2026-07-22). Clamping once here covers both without `search()`'s boundary clamp
+   * which fences `query` verbatim into a SECOND local `claude -p` prompt that had no bound at all.
+   * Clamping once here covers both without `search()`'s boundary clamp
    * silently protecting only half of where this value goes.
    */
   const query = clampQuery(decision && typeof decision.query === 'string' ? decision.query.trim() : '');

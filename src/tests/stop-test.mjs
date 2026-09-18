@@ -6,7 +6,7 @@
 // NUDGE (may I hand its candidates to another agent?), while `state.transcriptPath` is the ONLY
 // thing that admits a session into the sweep's enumeration at all.
 //
-// Both of those got a defect in review that a single test here would have caught:
+// Both of those carried a defect that a single test here would have caught:
 //   · the empty-message path RETURNED before stamping the clock, so a session resumed after a day
 //     still read as idle — flushable, and its queue handed to a foreign agent while its own agent
 //     was being nudged with the same candidates;

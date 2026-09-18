@@ -31,7 +31,7 @@ reset();
 try { fs.unlinkSync(verdictMutationsOffFile()); } catch { /* fine — not there yet */ }
 
 /**
- * THE FAKE RECORD STORE, as of 2026-08-14 (B2) — recall.mjs's OWN-session nudge (`recall.mjs:371`)
+ * THE FAKE RECORD STORE — recall.mjs's OWN-session nudge (`recall.mjs:371`)
  * reads `candidates.mjs`'s `addressablePending(sessionId)` now, not the local file queue, so this
  * suite has to seed records, not append file events. `/v1/search` is also stubbed (empty results)
  * — recall.mjs's hit-search runs on every steady-state prompt and is fail-open by design; a fixed
@@ -43,7 +43,7 @@ const ENV = { ...process.env, VECTROS_API_KEY: 'ssk_test_fake_for_nudge_test', V
 let seedCounter = 0;
 /** Seed `n` pending candidate records for `SID`, titled/bodied exactly as the file-driven version
  * of this suite did — the CONTENT under test (threshold crossing, nag suppression) is unchanged by
- * B2; only where it's stored is. */
+ * the move to record-backed storage; only where it's stored is. */
 function seedPending(n) {
   for (let i = 0; i < n; i++) {
     const k = ++seedCounter;
@@ -85,7 +85,7 @@ const runRecall = (prompt) => new Promise((resolve) => {
     let ctx = '';
     try { ctx = JSON.parse(out || '{}').hookSpecificOutput?.additionalContext || ''; } catch {}
     /**
-     * `ctx.includes('MEMORY CANDIDATES')` was a FALSE POSITIVE against a real dogfood machine: this
+     * `ctx.includes('MEMORY CANDIDATES')` was a FALSE POSITIVE in real testing: this
      * runs recall.mjs for real (not stubbed), and `ownPending === 0` also opens the gate for a
      * DIFFERENT session's ORPHAN nudge (nudge.mjs), whose header is "ORPHANED MEMORY CANDIDATES ..."
      * — a superstring of the very text this checked for. So a genuinely orphaned queue elsewhere on
@@ -125,9 +125,9 @@ disposeAllSeeded();
 r = await runRecall('all settled now');
 check('a drained queue is silent', !r.crash && !r.hasNudge, r.crash || `hasNudge=${r.hasNudge}`);
 
-console.log('\n=== 6. THE DISPOSAL INSTRUCTIONS (the 2026-07-20 wrong-`ignored` incident) ===');
+console.log('\n=== 6. THE DISPOSAL INSTRUCTIONS (the wrong-`ignored` failure mode) ===');
 /**
- * A PM session verified a candidate "against the repo" — the old wording — checked two repo docs
+ * A settling session verified a candidate "against the repo" — the old wording — checked two repo docs
  * that were STALE, and disposed a TRUE candidate as `ignored:PREMISE IS FALSE`. `ignored` is
  * irreversible and unverified, so the candidate was destroyed.
  *
@@ -137,7 +137,7 @@ console.log('\n=== 6. THE DISPOSAL INSTRUCTIONS (the 2026-07-20 wrong-`ignored` 
  *
  * PURE — no network, no subprocess. `renderNudge` takes a plain array; `.id` is what these fixture
  * objects carry (matching the file-driven shape), and nudge.mjs's own `field(c.ordinal ?? c.id)`
- * (B2) falls back to it correctly, so this section is unaffected by the records flip.
+ * falls back to it correctly, so this section is unaffected by the records flip.
  */
 {
   const { renderNudge, NUDGE_THRESHOLD: NT } = await import(pathToFileURL(path.join(DIR, 'nudge.mjs')).href);

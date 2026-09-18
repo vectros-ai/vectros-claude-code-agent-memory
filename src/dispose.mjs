@@ -33,7 +33,7 @@
  * landed and this returns non-zero — partial application. The header used to claim that could not
  * happen.
  *
- * `cN` ADDRESSES A RECORD, NOT A LINE IN A FILE (as of 2026-08-14, B2). The candidate corpus lives
+ * `cN` ADDRESSES A RECORD, NOT A LINE IN A FILE. The candidate corpus lives
  * in Vectros records; a `cN` is a stable ordinal over ALL of a session's candidates ever
  * (`candidates.mjs`'s `bySession`/`withOrdinals`) — settling one never renumbers another. Settling
  * PATCHES THE RECORD FIRST; the local queue file is then updated as a best-effort durability
@@ -89,7 +89,7 @@ import { DISPOSE_TIMEOUT_MS, DISPOSE_STORED_RECENCY_MIN, NUDGE_TITLE_MAX_CHARS, 
  * even for an id containing a slug-affected character (a colon, a space, ...).
  *
  * ONLY WHEN EXACTLY ONE CANDIDATE SURVIVES does resolution proceed — this is the fix for a real
- * bug a review caught (2026-08-17): an earlier version checked "does a literal file exist?" FIRST
+ * bug: an earlier version checked "does a literal file exist?" FIRST
  * and returned it immediately, without ever checking whether that same literal input could ALSO be
  * a truncated prefix of some other, longer session's id sitting in the same directory. Two
  * candidates for one input is exactly as unresolvable as a genuine multi-way prefix collision, and
@@ -156,7 +156,7 @@ function resolveSessionId(input) {
 }
 
 /**
- * THE ADDRESS SPACE, as of 2026-08-14 (B2, the full flip) — records, not the file.
+ * THE ADDRESS SPACE, since the full flip — records, not the file.
  *
  * `bySession` numbers ALL of a session's candidates ever, settled included, so an ordinal
  * (`c1`, `c2`, ...) is a real, STABLE address: `c2` stays `c2` for the life of the session even
@@ -181,7 +181,7 @@ async function readRecords(sessionId) {
 /**
  * BACK UP THE SETTLEMENT TO THE LOCAL FILE — best-effort, loud on failure, never blocking.
  *
- * Inverted from this function's pre-2026-08-14 shape (`patchRecordToo`): the RECORD write is now
+ * Inverted from this function's earlier shape (`patchRecordToo`): the RECORD write is now
  * the operation that determines whether dispose.mjs succeeds (see Phase 2 in `main()`), and this
  * call is what makes the local file agree with it afterward — the mirror image of
  * capture-worker.mjs's propose-side shape (record-first, file best-effort, counted and loud, never
@@ -270,7 +270,7 @@ async function recordExists(id, { requireRecent = true } = {}) {
     // carry on"; here it must mean STOP. Fail-open on a verification gate is not a gate.
 
     /**
-     * EXISTENCE IS NOT CORRESPONDENCE (fixed 2026-07-16, cold panel).
+     * EXISTENCE IS NOT CORRESPONDENCE.
      *
      * This fetched `typeName` and threw it away, so ANY 2xx passed. The gate was closed against
      * the improbable failure (a random typo -> 404) and open against the probable one: recall
@@ -279,8 +279,8 @@ async function recordExists(id, { requireRecent = true } = {}) {
      *
      * `tests/dispose-test.mjs` demonstrated it: it settled a candidate titled "stored path" with
      * the uuid of a real, unrelated, already-existing memory record — a pinned memory covering a
-     * completely different topic. Unrelated content, exit 0, asserted as correct. My own test
-     * proved the hole and called it a pass.
+     * completely different topic. Unrelated content, exit 0, asserted as correct. The test meant
+     * to catch this proved the hole instead, and called it a pass.
      *
      * Checked now: the id echoes, and the record IS a memory (a `document`/ADR id is the shape of
      * the mistake this catches). Neither is sufficient — a real, unrelated MEMORY uuid still
@@ -312,7 +312,7 @@ async function recordExists(id, { requireRecent = true } = {}) {
 /**
  * Verify an `ignored:covered:<ref>` citation — the fix for the ONE-WAY DOOR BEING THE UNLOCKED ONE.
  *
- * THE INCIDENT (2026-07-20). A PM session settled 29 candidates and got one wrong in the most
+ * THE FAILURE MODE THIS CLOSES. A settling session once disposed 29 candidates and got one wrong in the most
  * expensive direction: it disposed a TRUE candidate as `ignored:PREMISE IS FALSE`, citing two repo
  * docs that were themselves STALE. `ignored` is never re-offered, so the candidate was destroyed —
  * and nothing in this file even looked at the reason. Note the asymmetry that made it possible:
@@ -527,8 +527,8 @@ function docExists(ref) {
    * resolved to the nested one. Either is defensible; recording the bare string `TOP-LEVEL.md` is
    * not, because the disposition is PERMANENT and a reader cannot tell which file was actually
    * verified. `note` is carried into the queue append as a separate `resolved` field.
-   * The first cut of this comment said `note` ALREADY landed there — false, and caught by a cold
-   * review: it reached stdout only, so the permanent-record argument this comment makes was an
+   * The first cut of this comment said `note` ALREADY landed there — false: it reached stdout
+   * only, so the permanent-record argument this comment makes was an
    * argument for a fix that had not been written. The fix is at the append; see it there.
    */
   // No `|| '.'` fallback: the only input that produced an empty relative path was `documented:.`,
@@ -683,7 +683,7 @@ async function main() {
       if (!cand) { console.error(NO(`${id}: no such candidate in this session's queue`)); process.exitCode = 1; continue; }
       if (rq.superseded.has(id)) {
         // NOT "not disposed" — a candidate can be BOTH settled (stored/documented/ignored) AND
-        // later superseded by a revise; the two sets are independent (found in review: the prior
+        // later superseded by a revise; the two sets are independent (an earlier version of this
         // wording asserted "not disposed", which is simply false whenever both are true). The
         // refusal itself is correct either way — reopening a superseded candidate is never right.
         console.error(NO(`${id}: was SUPERSEDED by a revise — a later run already corrected this claim, `
@@ -790,7 +790,7 @@ async function main() {
        * It stays legal because "not durable" and "point-in-time" are real dispositions with nothing
        * to cite, and demanding a citation there teaches the agent to invent one. But the agent must
        * see, at the moment it settles, that this particular claim was taken on trust — and that the
-       * cited form exists. The 2026-07-20 incident was a bare `ignored:PREMISE IS FALSE` whose
+       * cited form exists. The case that motivated this was a bare `ignored:PREMISE IS FALSE` whose
        * premise was true; a line saying "nothing checked this" is the cheapest thing that could
        * have interrupted it.
        */
@@ -812,12 +812,12 @@ async function main() {
   }
 
   // ── Phase 2: settle. The RECORD write is now the operation that determines success — records is
-  // the address space and the source of truth as of 2026-08-14 (B2); the file is a backup.
+  // the address space and the source of truth; the file is a backup.
   let n = 0;
   for (const s of specs) {
     /**
      * BOTH THE CLAIM AND WHAT IT RESOLVED TO. `ref` is what the agent typed; `resolved` is the file
-     * or record the gate actually verified. Keeping only `ref` was the defect a cold review caught:
+     * or record the gate actually verified. Keeping only `ref` was the defect:
      * the root-relative normalisation reached the terminal line and nothing else, so a `documented:
      * ../../TOP-LEVEL.md` citation from a nested subdirectory left a permanent record that still
      * could not say which of two same-named files was checked.
@@ -839,7 +839,7 @@ async function main() {
       return;
     }
     // The audit trail — including whether this claim was VERIFIED or taken on trust, which is the
-    // distinction the 2026-07-20 incident turned on.
+    // distinction that matters most for an irreversible disposition.
     const checked = s.disposition === 'ignored' && !/^covered:/i.test(s.ref || '') ? 'UNVERIFIED' : 'verified';
     audit(sessionId, `${s.id} -> ${s.disposition} (${checked}) ${s.ref || '(no ref)'}`
       + (s.note && s.note !== s.ref ? ` [resolved: ${s.note}]` : ''));

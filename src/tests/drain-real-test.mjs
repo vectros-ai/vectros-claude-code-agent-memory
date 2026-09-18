@@ -1,8 +1,8 @@
 // The drain loop, end-to-end, against the REAL distiller.
 //
 // The fake-binary seam is unusable on Windows (Node refuses to spawn a .cmd without shell:true,
-// and even with it the effective cwd shifts under the fake), and stubbing at any other seam would test my
-// replica of the loop rather than the loop. So: real worker, real claude -p, ~1.2M chars of
+// and even with it the effective cwd shifts under the fake), and stubbing at any other seam would test a
+// hand-written replica of the loop rather than the loop. So: real worker, real claude -p, ~1.2M chars of
 // transcript = 3 windows, ~$0.30. Coverage is measured from the capture-log, which records
 // {from,to,chars,remaining,total} for every window the worker actually distilled.
 import fs from 'node:fs';

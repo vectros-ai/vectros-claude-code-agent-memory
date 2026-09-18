@@ -114,7 +114,7 @@ function setToken() {
 /** Copy every built file (hooks + prompts/) EXCEPT this installer itself into the runtime dir. */
 function deployRuntime() {
   const dest = memoryHome();
-  // FOUND (PM cold pass, this MR): unguarded — `--dry-run` created the runtime DIRECTORY for
+  // unguarded — `--dry-run` created the runtime DIRECTORY for
   // real even though every file/keyring copy below it correctly checks `dryRun` first, silently
   // contradicting this package's own README/CHANGELOG claim that `--dry-run` makes no writes.
   if (!dryRun) fs.mkdirSync(dest, { recursive: true });
@@ -232,8 +232,8 @@ function mergeSettings(runtimeDir) {
      * this event's commands" and skipped the WHOLE event on a single match — so an upgrade that
      * adds a file to an event already partially wired (e.g. `Stop` gaining a third hook file)
      * silently wired NOTHING new for that event: the pre-existing command for the OTHER file
-     * satisfied `already`, and the new one was never added, with no diagnostic. Found by a review
-     * agent tracing this docstring's own "an upgrade... never duplicates the wiring" claim
+     * satisfied `already`, and the new one was never added, with no diagnostic. Found tracing
+     * this docstring's own "an upgrade... never duplicates the wiring" claim
      * against what happens when `HOOK_FILES[event]` grows. Compute what's actually missing,
      * across every existing block for this event, and add only that.
      */
@@ -255,7 +255,7 @@ function mergeSettings(runtimeDir) {
     return settingsPath;
   }
   fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-  // FOUND (PM cold pass, this MR): this used to be a plain fs.writeFileSync — a truncate-then-
+  // this used to be a plain fs.writeFileSync — a truncate-then-
   // write over the user's ENTIRE global Claude Code config (MCP servers, permissions, every other
   // tool's hooks), not just the block this function adds. `writeFileAtomic` is already the tier
   // used for credentials.json a few lines away in this same file; settings.json is at least as
@@ -297,7 +297,7 @@ function pinKeyringAlias() {
   /**
    * Check what's ABOUT to be pinned, not just what's currently pinned — a durable-but-wrong pin is
    * the same mistake this whole tier exists to prevent LATER, just made permanent at install time
-   * instead (found in review). Loud, not blocking: an operator can legitimately want their normal
+   * instead. Loud, not blocking: an operator can legitimately want their normal
    * hooks pointed at a test tenant (a dedicated dev machine, say), so this warns and still pins —
    * it just makes sure that choice is visible rather than a silent side effect of whatever happened
    * to be active the moment `init` ran.

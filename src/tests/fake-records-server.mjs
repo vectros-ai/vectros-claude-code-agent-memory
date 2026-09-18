@@ -5,7 +5,7 @@
  *
  * WHY A REAL LOCAL SERVER, NOT AN INJECTED `fetchImpl`. `candidates-test.mjs` already covers
  * `candidates.mjs`'s exported functions in-process with a fake `fetchImpl` — that is the right
- * tool for testing candidates.mjs ITSELF. But `dispose.mjs` (as of 2026-08-14, B2) is exercised as
+ * tool for testing candidates.mjs ITSELF. But `dispose.mjs` is exercised as
  * a real SUBPROCESS via `spawnSync` (dispose-test.mjs, nudge-test.mjs via recall.mjs), and a
  * subprocess has no way to receive an injected function from its parent test. Pointing
  * `VECTROS_API_BASE_URL` at a real local HTTP server lets the full real code run unmodified —
