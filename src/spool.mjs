@@ -86,9 +86,14 @@ export function spoolSupersede(sessionId, targetExternalId, byExternalId) {
 /**
  * Fold the log into what is still owed.
  *
- *   owed   — proposals with no `synced`, under the attempt budget, oldest first
- *   parked — over budget: still on disk, never retried again, counted so the loss is MEASURED
- *   synced — how many landed (for the receipt)
+ *   owed        — proposals with no `synced`/`quarantined`, under the attempt budget, oldest first
+ *   parked      — over budget: still on disk, never retried again, counted so the loss is MEASURED
+ *   synced      — how many landed (for the receipt)
+ *   quarantined — how many were settled by the redaction gate WITHOUT ever reaching the network —
+ *                 see `markQuarantined`'s header for why this is its own terminal bucket and not
+ *                 folded into `parked` (a parked entry is a real, measured LOSS; a quarantined one
+ *                 is a deliberate refusal, working as designed, and conflating the two would make
+ *                 report.mjs's "parked = a real loss" framing wrong the moment this gate shipped)
  *
  * A malformed line is skipped, not fatal: one bad append must not strand a session's whole spool.
  */
@@ -107,18 +112,19 @@ export function read(sessionId, dir) {
     const p = dir ? path.join(dir, `${slug(sessionId)}.jsonl`) : spoolPath(sessionId);
     lines = fs.readFileSync(p, 'utf8').split('\n').filter(Boolean);
   } catch (e) {
-    if (e.code === 'ENOENT') return { owed: [], parked: [], synced: 0, events: 0, state: 'fresh' };
+    if (e.code === 'ENOENT') return { owed: [], parked: [], quarantined: [], synced: 0, events: 0, state: 'fresh' };
     /**
      * Fail CLOSED, exactly as the queue's reader does. Reporting "nothing owed" for a spool we
      * could not read would let a caller conclude everything is synced — and the natural next step
      * after that conclusion is to stop asking, which strands real proposals silently.
      */
     hlog('spool', `READ FAILED (${e.code}) — cannot tell what is owed; skipping this flush`, sessionId);
-    return { owed: [], parked: [], synced: 0, events: 0, state: 'corrupt' };
+    return { owed: [], parked: [], quarantined: [], synced: 0, events: 0, state: 'corrupt' };
   }
 
   const writes = new Map();
   const synced = new Set();
+  const quarantinedIds = new Map(); // externalId -> why
   const attempts = new Map();
   let events = 0;
   for (const l of lines) {
@@ -141,21 +147,36 @@ export function read(sessionId, dir) {
     events++;
     if (e.op === 'write' && e.externalId) writes.set(e.externalId, e);
     else if (e.op === 'synced' && e.externalId) synced.add(e.externalId);
+    else if (e.op === 'quarantined' && e.externalId) quarantinedIds.set(e.externalId, e.why || 'unknown');
     else if (e.op === 'failed' && e.externalId) attempts.set(e.externalId, (attempts.get(e.externalId) || 0) + 1);
   }
 
   const owed = [];
   const parked = [];
   for (const [externalId, ev] of writes) {
-    if (synced.has(externalId)) continue;
+    if (synced.has(externalId) || quarantinedIds.has(externalId)) continue;
     const n = attempts.get(externalId) || 0;
     (n >= SPOOL_MAX_ATTEMPTS ? parked : owed).push({ ...ev, attempts: n });
   }
-  return { owed, parked, synced: synced.size, events, state: 'ok' };
+  const quarantined = [...quarantinedIds].map(([externalId, why]) => ({ externalId, why }));
+  return { owed, parked, quarantined, synced: synced.size, events, state: 'ok' };
 }
 
 export const markSynced = (sessionId, externalId) => append(sessionId, { op: 'synced', externalId });
 export const markFailed = (sessionId, externalId, why) => append(sessionId, { op: 'failed', externalId, why });
+/**
+ * Settle a proposal the redaction gate refused to transmit — TERMINAL on the first call, never
+ * retried, unlike `markFailed` (which counts toward a retry budget that eventually parks).
+ *
+ * WHY THIS IS NOT JUST `markFailed` WITH A DIFFERENT STRING. The gate's classifier is a SAMPLED
+ * model call, not a deterministic check — asking it again on a later flush is not "retrying the
+ * same bytes", it is drawing again from a distribution. Routing a quarantine through the ordinary
+ * chargeable-then-parked path would let a flagged candidate be re-classified on every retry up to
+ * `SPOOL_MAX_ATTEMPTS` times, and any ONE lucky "clean" draw among those attempts ships it — turning
+ * a fail-closed verdict into "sent if any of N independent guesses says it's fine". Settling it here,
+ * immediately, on the first (and only) attempt is what makes the gate's verdict actually final.
+ */
+export const markQuarantined = (sessionId, externalId, why) => append(sessionId, { op: 'quarantined', externalId, why });
 
 /**
  * Attempt every owed write, oldest first, up to the per-run cap.
@@ -183,7 +204,7 @@ export async function flush(sessionId, opts = {}) {
    * a write path: turning it off must not start losing the thing the write path was protecting.
    */
   const off = spoolDisabled();
-  if (off) return { attempted: 0, synced: 0, failed: 0, parked: 0, skipped: `off:${off}` };
+  if (off) return { attempted: 0, synced: 0, failed: 0, quarantined: 0, parked: 0, skipped: `off:${off}` };
   /**
    * A MISSING SCHEMA MUST NOT SPEND THE RETRY BUDGET — and this was a real bug, caught by probing
    * the exact sequence the deploy gate creates.
@@ -203,17 +224,43 @@ export async function flush(sessionId, opts = {}) {
    */
   if (paused()) {
     const s0 = read(sessionId);
-    return { attempted: 0, synced: 0, failed: 0, parked: s0.parked.length, skipped: 'schema-absent' };
+    return { attempted: 0, synced: 0, failed: 0, quarantined: 0, parked: s0.parked.length, skipped: 'schema-absent' };
   }
   const s = read(sessionId);
-  if (s.state === 'corrupt') return { attempted: 0, synced: 0, failed: 0, parked: s.parked.length, skipped: 'corrupt' };
-  if (!s.owed.length) return { attempted: 0, synced: 0, failed: 0, parked: s.parked.length, skipped: null };
+  if (s.state === 'corrupt') return { attempted: 0, synced: 0, failed: 0, quarantined: 0, parked: s.parked.length, skipped: 'corrupt' };
+  if (!s.owed.length) return { attempted: 0, synced: 0, failed: 0, quarantined: 0, parked: s.parked.length, skipped: null };
 
   const batch = s.owed.slice(0, SPOOL_FLUSH_MAX_PER_RUN);
+  // Correctors already settled as quarantined — from a PRIOR run (`s.quarantined`) or from THIS one
+  // (added to as the loop below settles each item) — so a supersede entry whose corrector never
+  // reached the store can be recognised whichever run actually quarantined it.
+  const quarantinedIds = new Set(s.quarantined.map((e) => e.externalId));
   let synced = 0;
   let failed = 0;
+  let quarantined = 0;
   let halted = null;
   for (const item of batch) {
+    /**
+     * A CORRECTION THAT WAS ITSELF QUARANTINED MUST NOT RETIRE THE CLAIM IT WAS CORRECTING.
+     *
+     * `spoolSupersede` is spooled unconditionally whenever a capture carries `revises` — before
+     * anything is known about whether the corrector's OWN write will ever land. If the corrector
+     * (`item.supersede.by`) ends up quarantined instead of synced, applying the supersede anyway
+     * would mark the ORIGINAL claim `supersededBy` a correction that never reached the store: the
+     * original drops out of `pending()` (superseded candidates are filtered there), the correction
+     * doesn't exist anywhere reviewable, and nothing a reviewer reads shows either one. Settle this
+     * supersede entry as quarantined too — the correction was refused for a real reason, so there is
+     * nothing left to apply, and retrying is exactly as pointless as retrying the quarantine itself.
+     */
+    if (item.supersede && quarantinedIds.has(item.supersede.by)) {
+      if (!markQuarantined(sessionId, item.externalId, 'corrector-quarantined')) {
+        hlog('spool', `${item.externalId} (a supersede) has a quarantined corrector but its own `
+          + 'marker did not append — it stays owed and will be re-attempted', sessionId);
+      } else {
+        quarantined++;
+      }
+      continue;
+    }
     /**
      * ONLY AN ENTRY-SPECIFIC REFUSAL SPENDS THE BUDGET — and getting this wrong cost the deploy
      * gate's entire guarantee.
@@ -255,6 +302,33 @@ export async function flush(sessionId, opts = {}) {
       }
       synced++; continue;
     }
+    /**
+     * QUARANTINE IS SETTLED, NEVER RETRIED — checked BEFORE `CHARGEABLE`, and deliberately not
+     * folded into it. See `markQuarantined`'s header: the gate's classifier is a sampled model
+     * call, so retrying it is drawing again from a distribution, not re-checking the same bytes.
+     * One attempt, one settlement, either direction — this branch neither halts (a quarantine says
+     * nothing about the REST of the batch) nor charges a retry budget it will never use again.
+     */
+    if (fail.reason === 'quarantined') {
+      // `fail.detail` carries the actual class (customer_identifier /
+      // secret-unboundable / malformed-field / uncertain) `propose()` got from the gate — recorded
+      // so a later reader of the spool file sees WHICH verdict flagged it, not just that one did.
+      if (!markQuarantined(sessionId, item.externalId, fail.detail || 'unknown')) {
+        // Mirrors the `markSynced` check just above: if THIS append fails, the entry is still
+        // `write`-only in the fold (neither synced nor quarantined) and stays owed — the next flush
+        // re-asks the classifier, which is the exact re-sampling risk this whole mechanism exists to
+        // close, reopened here only by a local disk failure. Logged loudly because it is the one
+        // path where a "terminal" verdict silently isn't.
+        hlog('spool', `${item.externalId} was quarantined but its marker did not append — it stays `
+          + 'owed and will be RE-CLASSIFIED on the next flush', sessionId);
+      } else {
+        // Visible to the supersede check above for the REST of this same batch, not just a later
+        // run — a corrector and its own supersede entry can both be owed in one flush.
+        quarantinedIds.add(item.externalId);
+      }
+      quarantined++;
+      continue;
+    }
     if (CHARGEABLE.has(fail.reason)) {
       // The reason is RECORDED, not a constant — a parked entry's only evidence is this line, and
       // "propose returned null" told a later reader nothing about why it could not land.
@@ -265,16 +339,17 @@ export async function flush(sessionId, opts = {}) {
     halted = fail.reason || 'unknown';
     break;
   }
-  if (synced || failed || halted) {
-    hlog('spool', `flush: ${synced} synced, ${failed} failed, ${s.owed.length - batch.length} deferred, ${s.parked.length} parked`
+  if (synced || failed || quarantined || halted) {
+    hlog('spool', `flush: ${synced} synced, ${failed} failed, ${quarantined} quarantined, `
+      + `${s.owed.length - batch.length} deferred, ${s.parked.length} parked`
       + (halted ? ` — HALTED on '${halted}': an environment failure, so the rest stay owed and spend no budget` : ''), sessionId);
   }
   return {
     // `attempted` is what was actually tried, not the batch size — a halt leaves the remainder
     // untouched, and reporting them as attempted would overstate what this run observed.
-    attempted: synced + failed, synced, failed,
+    attempted: synced + failed + quarantined, synced, failed, quarantined,
     parked: s.parked.length,
-    deferred: s.owed.length - (synced + failed),
+    deferred: s.owed.length - (synced + failed + quarantined),
     halted,
     skipped: null,
   };

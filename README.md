@@ -19,13 +19,18 @@ without ever writing to your knowledge base on their own:
   recall opportunities the first pass's plain search misses.
 - **Capture.** When a session accumulates enough new transcript, a background worker distills
   candidate lessons out of it — durable facts, decisions, gotchas — and **automatically POSTs each
-  one to your Vectros store** as an unreviewed `candidate` record. This transmission happens
-  without asking first, and the record carries real content: a title, a body, a category, which
-  session it came from, and — when the distiller found one — a suggested destination (memory vs.
-  documentation), an area tag, free-text tags, or a file/doc reference it cited. Nothing filters
-  this content for sensitivity before it transmits, so a candidate can echo a secret, an
-  identifier, or other sensitive transcript content verbatim — that gap is tracked as its own
-  follow-up. What it does NOT do is make that content recallable — see Disposition below.
+  one to your Vectros store** as an unreviewed `candidate` record, without asking first. Before
+  that POST, every candidate passes a local content gate. Secrets in known formats (AWS access
+  keys, API keys and tokens, JWTs, `scheme://user:pass@host` connection strings, private-key blocks) are
+  replaced with `[REDACTED]`, and the rest of the lesson is sent. A candidate that contains a US Social
+  Security number-shaped or payment-card-shaped number, or that a small model call, made through your own
+  Claude Code, judges to describe a real, identifiable individual or organization, is withheld and never transmitted;
+  security-related lessons are not withheld for that reason. A withheld candidate stays only in
+  this machine's local capture log and spool file, and no command in this package lists a withheld candidate for review.
+  The model call's judgment is tested here only against a fake model response. If the model call is unavailable, the candidate
+  is held and retried later. The gate is a best-effort filter: it does not recognize every secret
+  or personal-data format. Capture does not make transmitted content recallable — see Disposition
+  below.
 - **Disposition — you decide, always.** A captured candidate is *never* written into your live
   knowledge base automatically. It sits in a review queue until you (or the agent, with the right
   tool access — see "Recommended, not required" below) explicitly disposes of it: point it at a
@@ -46,8 +51,10 @@ README — this section exists so you never have to jump around to get from noth
    ```bash
    npm i -g @vectros-ai/cli
    vectros login
-   vectros bootstrap --blueprint agentic-sdlc --tenant test --no-seed --yes
+   vectros bootstrap --blueprint agentic-sdlc --tenant test --no-seed --yes --activate
    ```
+   (`--activate` makes the new test key your active identity even when a live identity is
+   already active; without it, a `--tenant test` bootstrap leaves an active live identity in place.)
 2. **Install this package and deploy the hooks:**
    ```bash
    npm install -g @vectros-ai/claude-code-agent-memory
@@ -145,9 +152,9 @@ Two separate credentials, resolved independently:
 
   **`init` pins whichever identity is active at that moment, so these hooks stop tracking the
   CLI's active identity from then on.** This matters: `vectros bootstrap` (any blueprint, including
-  `--tenant test`) *always* activates the credential it just minted, with no exception for a test
-  tenant — so provisioning a completely unrelated test tenant later, on the same machine, would
-  otherwise silently redirect every one of these hooks onto it too. Once `init` has pinned an alias,
+  `--tenant test`) activates the credential it just minted unless that would displace an active live
+  identity — so provisioning an unrelated tenant later, on the same machine, would otherwise
+  redirect every one of these hooks onto it too. Once `init` has pinned an alias,
   a later `vectros switch`/`bootstrap` elsewhere no longer touches these hooks; to point them at a
   *different* identity deliberately, either set `VECTROS_KEYRING_ALIAS` yourself (below — this
   always wins over the pin) or edit/clear `VECTROS_KEYRING_ALIAS` in your runtime directory's
@@ -246,6 +253,9 @@ were the backstop acting rather than a human call. `touch ORPHAN_CAP_OFF` in the
 Every tunable the loop uses (retrieval window sizes, debounce timers, budget caps, …) lives in
 `config.mjs` in the runtime directory, with its shipped default and an env-var override
 (`VECTROS_MEM_<KEY>`) — `report.mjs`'s output shows which are in force.
+The content gate's model call has its own time budget, `VECTROS_MEM_CLASSIFIER_TIMEOUT_MS`
+(default 25000), and uses the model named by `VECTROS_MEM_CLASSIFIER_MODEL` (default: the capture
+model).
 
 ## Prompting your agent to use this well
 

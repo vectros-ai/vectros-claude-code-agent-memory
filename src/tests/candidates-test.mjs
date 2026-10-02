@@ -28,8 +28,17 @@ process.env.VECTROS_HOOKLOG_PATH = path.join(
 // which would make every assertion below vacuously "pass" for the wrong reason.
 process.env.VECTROS_API_KEY = 'ssk_test_fake_for_unit_tests';
 
-const { propose, settle, reopen, markSuperseded, pending, bySession, pendingForSession,
-  proposedBetween, withOrdinals, mintExternalId, TYPE } = await import('../candidates.mjs');
+const { propose: _propose, settle, reopen, markSuperseded, pending, bySession, pendingForSession,
+  proposedBetween, withOrdinals, mintExternalId, TYPE, CHARGEABLE } = await import('../candidates.mjs');
+/**
+ * This file exercises the RECORD CLIENT (request shapes, pagination, disposition semantics) with a
+ * fake `fetchImpl` transport — not the redaction gate `propose()` now runs first (§10 below tests
+ * that specifically, and redact-test.mjs covers Layer 1/2 in isolation). Wrapped so every existing
+ * `propose()` call auto-passes a trivial "always send" gate, and §10's own calls override it with a
+ * fake `gateImpl` of their choosing — same shape as spool-test.mjs's identical wrapper.
+ */
+const PASS_GATE = async (fields) => ({ send: true, fields });
+const propose = (sid, c, opts = {}) => _propose(sid, c, { gateImpl: PASS_GATE, ...opts });
 const { verdictMutationsOffFile } = await import('../paths.mjs');
 /**
  * THIS FILE OPTS IN TO VERDICT MUTATIONS, and it is the one file that may.
@@ -527,6 +536,79 @@ console.log('\n=== 13. ordinals are stable: an agent settles the candidate it wa
       p.every((c) => c.ordinal === undefined), JSON.stringify(p.map((c) => c.ordinal)));
     eq('...but is still ordered oldest-first', p.map((c) => c.title).join(''), 'AB');
   }
+}
+
+// ── 14. THE REDACTION GATE — propose()'s WIRING of a quarantine/redact/unavailable verdict. The
+// gate's own pattern/classifier logic is unit-tested in isolation in redact-test.mjs; this section
+// only proves propose() honours what the gate decides, using a fake `gateImpl` (same shape as
+// `fetchImpl`), and that the two `send:false` reason shapes map to the right spool.mjs semantics.
+console.log('\n=== 14. the redaction gate — propose() honours quarantine/unavailable/redacted-send verdicts ===');
+{
+  clearGap();
+  // A quarantine verdict must reach NO network call at all — the whole point is that this content
+  // never leaves the machine, not that it is sent flagged.
+  const f = fake({ status: 201, body: rec({}) });
+  const quarantine = async () => ({ send: false, reason: 'quarantined:customer_identifier' });
+  const fail = {};
+  const r = await propose('s', { title: 'secret stuff', body: 'b', kind: 'observation', externalId: 'x' },
+    { fetchImpl: f.impl, gateImpl: quarantine, fail });
+  check('a quarantined candidate returns null', r === null);
+  check('a quarantined candidate never reaches the network', f.calls.length === 0, JSON.stringify(f.calls));
+  eq("a definitive verdict maps to fail.reason 'quarantined'", fail.reason, 'quarantined');
+  check("'quarantined' is NOT in CHARGEABLE — it is settled through spool.mjs's own "
+    + "markQuarantined (terminal on the first attempt), never retried via the chargeable-then-"
+    + 'parked path a sampled classifier call could flip on a later retry', !CHARGEABLE.has('quarantined'));
+}
+{
+  clearGap();
+  // The classifier being UNAVAILABLE (couldn't spawn, timed out, no output) is NOT a content
+  // verdict — nothing was judged, so it must map to the SAME non-chargeable, batch-halting reason
+  // as any other environment failure ('unreachable'), never to 'quarantined'. Mapping it to
+  // 'quarantined' would let an offline/rate-capped machine permanently PARK real candidates for a
+  // reason that has nothing to do with what they contain.
+  const f = fake({ status: 201, body: rec({}) });
+  const unavailable = async () => ({ send: false, reason: 'unavailable:classifier' });
+  const fail = {};
+  const r = await propose('s', { title: 't', body: 'b', kind: 'observation', externalId: 'x' },
+    { fetchImpl: f.impl, gateImpl: unavailable, fail });
+  check('an unavailable classifier returns null', r === null);
+  check('an unavailable classifier never reaches the network', f.calls.length === 0);
+  eq("classifier-unavailable maps to fail.reason 'unreachable', NOT 'quarantined'", fail.reason, 'unreachable');
+  check("'unreachable' is not chargeable — the batch halts and gets a free retry, same as any "
+    + 'other environment failure', !CHARGEABLE.has('unreachable'));
+}
+{
+  clearGap();
+  // A send verdict must transmit the GATE's fields, not the original — this is the assertion that
+  // actually proves redaction reaches the wire, not just that `fetch` was called. A wiring bug that
+  // called the gate but then sent `c.title`/`c.body` unchanged would pass every other test in this
+  // file and still leak the original secret.
+  // area/sourceRef/tags are redacted too, not just title/body — a wiring bug that forwarded ONLY
+  // f.title/f.body (copying c.area/c.sourceRef/c.tags straight from the original instead) would
+  // pass a title/body-only assertion and still leak a secret hiding in one of the other three.
+  const f = fake({ status: 201, body: rec({}) });
+  const redactAndSend = async () => ({
+    send: true,
+    fields: {
+      title: 'AWS key [REDACTED] rotated', body: 'lesson survives',
+      sourceRef: 'src/config.yml:[REDACTED]', area: 'auth-[REDACTED]', tags: ['ok', '[REDACTED]-tag'],
+    },
+  });
+  await propose('s', {
+    title: 'AWS key AKIAIOSFODNN7EXAMPLE rotated', body: 'the ORIGINAL body',
+    sourceRef: 'src/config.yml:AKIAIOSFODNN7EXAMPLE', area: 'auth-AKIAIOSFODNN7EXAMPLE',
+    tags: ['ok', 'AKIAIOSFODNN7EXAMPLE-tag'], kind: 'observation', externalId: 'x',
+  }, { fetchImpl: f.impl, gateImpl: redactAndSend });
+  const pl = f.calls[0].body.payload;
+  eq('the TRANSMITTED title is the gate-redacted one, not the original', pl.title, 'AWS key [REDACTED] rotated');
+  eq('...sourceRef too', pl.sourceRef, 'src/config.yml:[REDACTED]');
+  eq('...area too', pl.area, 'auth-[REDACTED]');
+  eq('...tags too', JSON.stringify(pl.tags), JSON.stringify(['ok', '[REDACTED]-tag']));
+  check('the original secret string never reaches ANY transmitted field',
+    !JSON.stringify(pl).includes('AKIAIOSFODNN7EXAMPLE'), JSON.stringify(pl));
+  eq('the TRANSMITTED body is the gate-redacted one too', pl.body, 'lesson survives');
+  check('the original secret string never reaches the request body',
+    !JSON.stringify(f.calls[0].body).includes('AKIAIOSFODNN7EXAMPLE'), JSON.stringify(f.calls[0].body));
 }
 
 clearGap();

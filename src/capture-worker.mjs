@@ -247,7 +247,17 @@ function runWindow(sessionId, transcriptPath, fromOffset) {
   // Array.isArray, not `|| []` — guards SHAPE, not just null/undefined. `|| []` still iterates a
   // string or object the model returned in place of an array; recall-eval-worker.mjs's sibling
   // fields (`decision.keep`) already guard this way, this one didn't.
-  for (const c of Array.isArray(decision.captures) ? decision.captures : []) {
+  //
+  // NOT capped here. An earlier version of this loop truncated to a fixed per-window count on the
+  // theory that each capture now costs a second local model call (the redaction gate's classifier,
+  // -> redact.mjs) — wrong: the classifier runs later, once per OWED SPOOL ENTRY inside
+  // `drainAll()`'s flush below, never inside this loop. A per-window cap here bounded nothing real
+  // and permanently dropped captures (this function has no per-capture watermark, so a dropped
+  // capture's source text is never retried) for no corresponding safety benefit. The real budget on
+  // the classifier's added cost lives in config.mjs's CONSTRAINTS check against
+  // SPOOL_DRAIN_MAX_SESSIONS x SPOOL_FLUSH_MAX_PER_RUN, where the calls actually happen.
+  const captures = Array.isArray(decision.captures) ? decision.captures : [];
+  for (const c of captures) {
     /**
      * THE CANDIDATE'S STABLE KEY, minted HERE and written to BOTH stores.
      *
@@ -434,8 +444,9 @@ async function main() {
     const tot = (k) => receipts.reduce((n, r) => n + (r[k] || 0), 0);
     if (tot('attempted')) {
       hlog('capture-worker',
-        `spool drain: ${tot('synced')} synced, ${tot('failed')} failed, ${tot('deferred')} deferred, `
-        + `${tot('parked')} parked across ${receipts.length} session(s)`, sessionId);
+        `spool drain: ${tot('synced')} synced, ${tot('failed')} failed, ${tot('quarantined')} quarantined `
+        + `(redaction gate), ${tot('deferred')} deferred, ${tot('parked')} parked across `
+        + `${receipts.length} session(s)`, sessionId);
     }
   } finally {
     releaseLock(sessionId);

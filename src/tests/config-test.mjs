@@ -356,6 +356,23 @@ try {
       resolveConfig({ file: '/nonexistent-config', env: { VECTROS_MEM_CAPTURE_CLAUDE_TIMEOUT_MS: '600000', VECTROS_MEM_LOCK_STALE_MS: String(3 * 3_600_000) } })
         .violations.length === 0);
 
+    // (b2) WARN: the classifier's share of the drain that follows the window loop. The default is
+    //      pinned because it was once too tight to ever succeed (a nested `claude -p` takes 5-13s),
+    //      and the drain product is what bounds how far it can be raised at default caps.
+    check('CLASSIFIER_TIMEOUT_MS default is 25s (a nested claude -p call takes 5-13s)',
+      SPEC.CLASSIFIER_TIMEOUT_MS.def === 25_000);
+    const cls60 = resolveConfig({ file: '/nonexistent-config', env: { VECTROS_MEM_CLASSIFIER_TIMEOUT_MS: '60000' } });
+    check('a 60s classifier budget breaks the lock relationship and SAYS so, naming the knob',
+      cls60.violations.some((v) => v.kind === 'warn' && /CLASSIFIER_TIMEOUT_MS/.test(v.name)), JSON.stringify(cls60.violations));
+    check('...and the value is still APPLIED — a hook never breaks a turn over config',
+      cls60.values.CLASSIFIER_TIMEOUT_MS === 60_000);
+    check('30s is the largest classifier budget that still holds at the default caps',
+      resolveConfig({ file: '/nonexistent-config', env: { VECTROS_MEM_CLASSIFIER_TIMEOUT_MS: '30000' } })
+        .violations.length === 0);
+    check('...and 31s does not',
+      resolveConfig({ file: '/nonexistent-config', env: { VECTROS_MEM_CLASSIFIER_TIMEOUT_MS: '31000' } })
+        .violations.some((v) => /CLASSIFIER_TIMEOUT_MS/.test(v.name)));
+
     // (c) WARN: reap window ordering, and the reap-vs-sweep window.
     check('inverted reap windows are caught',
       resolveConfig({ file: '/nonexistent-config', env: { VECTROS_MEM_REAP_PHANTOM_AFTER_MS: String(200 * 86_400_000) } })

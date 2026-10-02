@@ -49,6 +49,7 @@ import { CANDIDATE_TIMEOUT_MS, CANDIDATE_PAGE_LIMIT, CANDIDATE_MAX_PAGES, CANDID
 // pure re-export — it does NOT bind `X` locally, so `settle()` below needs the real `import`.
 import { DISPOSITIONS } from './queue.mjs';
 export { DISPOSITIONS };
+import { gate } from './redact.mjs';
 
 const BASE = (cred('VECTROS_API_BASE_URL') || 'https://api.vectros.ai').replace(/\/+$/, '');
 
@@ -157,11 +158,38 @@ function isMissingSchema(status, bodyText) {
  *                     quick succession) permanently PARK real candidates after SPOOL_MAX_ATTEMPTS,
  *                     for a reason no proposal caused and no retry-of-the-same-bytes could fix.
  *   'schema-absent' — the type is not provisioned here. A property of the ENVIRONMENT.
- *   'unreachable'   — 5xx, timeout, DNS, offline. A property of the MOMENT.
+ *   'unreachable'   — 5xx, timeout, DNS, offline, OR the redaction gate's classifier could not be
+ *                     ASKED at all (spawn failure, timeout, missing prompt file — → redact.mjs's
+ *                     `unavailable:` reason). Both are the classifier/store being unreachable at
+ *                     THIS moment, not a property of the proposal's content — nothing judged this
+ *                     entry, so it must not be charged. Conflating "couldn't ask" with "asked and
+ *                     got a real answer" is exactly the bug this split exists to avoid: an offline
+ *                     or rate-capped classifier would otherwise permanently PARK real candidates
+ *                     for a reason that has nothing to do with what they contain (see 'quarantined'
+ *                     below for the definitive-answer case this is NOT).
  *   'no-key'        — no credential at all.
+ *   'quarantined'   — the redaction gate (→ redact.mjs) reached a DEFINITIVE verdict against THIS
+ *                     proposal's content — a secret/credential it could not confidently bound, a
+ *                     malformed field it couldn't scan, or a real customer/PII identifier the
+ *                     classifier actually ran and reported. Never reaches the network at all —
+ *                     the store never sees the content.
  *
- * Only `rejected` is chargeable. Everything else applies identically to every entry in the batch,
- * so charging it punishes proposals for something none of them did.
+ *                     NOT part of the CHARGEABLE/halt fork below, and deliberately excluded from
+ *                     `CHARGEABLE` — spool.mjs settles it via its own `markQuarantined`, immediately,
+ *                     on the FIRST attempt, never retried. This is not the same guarantee `rejected`
+ *                     gets (charge N times, then park): the classifier is a SAMPLED model call, so
+ *                     asking it again on every spool retry is not "trying the same bytes again", it
+ *                     is drawing again from a distribution — up to `SPOOL_MAX_ATTEMPTS` independent
+ *                     chances for one lucky "clean" draw to undo a real flag. A verdict this gate
+ *                     already reached must not be re-litigated by retrying it into a different
+ *                     answer. (A deterministic pattern-based quarantine would be safe to re-ask —
+ *                     the regex can't flip — but there is no way to tell the two apart at this
+ *                     layer without re-introducing the exact risk this rule exists to close, so
+ *                     both get the same terminal treatment.)
+ *
+ * Only `rejected` is in `CHARGEABLE`. `quarantined` is settled through its own path (see above) and
+ * never reaches this set; everything else applies identically to every entry in the batch, so
+ * charging it punishes proposals for something none of them did.
  */
 export const CHARGEABLE = new Set(['rejected']);
 
@@ -335,14 +363,48 @@ export const mintExternalId = (sessionId, uuid) => `${sessionId}:${uuid}`;
 /**
  * Create a proposal. `revises` (an externalId) marks it as a CORRECTION of an earlier claim.
  *
- * Returns the normalised record, or `null` if the write could not run. The caller checks — a
- * dropped proposal that nobody notices is a lost lesson, which is the whole failure this
- * subsystem exists to prevent.
+ * Returns the normalised record, or `null` if the write could not run — OR if the redaction gate
+ * refused to transmit it (a quarantined candidate is not a write failure; it is a write this
+ * package deliberately never attempts). The caller checks either way — a dropped proposal that
+ * nobody notices is a lost lesson, which is the whole failure this subsystem exists to prevent.
+ *
+ * THE REDACTION GATE RUNS FIRST, UNCONDITIONALLY, BEFORE ANYTHING BELOW BUILDS A REQUEST. This is
+ * deliberately the one place every write path (the live capture drain, spool.mjs's flush, any
+ * future recovery/backfill tool) is guaranteed to pass through — see redact.mjs's header for why
+ * quarantine vs. redact-and-send is split the way it is.
  */
 export async function propose(sessionId, c, opts = {}) {
+  // `gateImpl` is injectable, same reason `fetchImpl` is (see `call()`'s header): the suite can
+  // exercise propose()'s WIRING of a quarantine/redact verdict without depending on redact.mjs's
+  // own pattern/classifier internals — those get their own focused tests in redact-test.mjs.
+  const doGate = opts.gateImpl || gate;
+  const verdict = await doGate({ title: c.title, body: c.body, sourceRef: c.sourceRef, area: c.area, tags: c.tags }, opts);
+  if (!verdict.send) {
+    // NOT logged with the candidate's own content — the whole point of quarantining is that this
+    // text never leaves the machine; a hooklog line naming the REASON is enough for the installer
+    // to find it in their own local queue/review log, which already holds the full content.
+    //
+    // `unavailable:` (the classifier couldn't be asked at all) maps to 'unreachable', NOT
+    // 'quarantined' — see the CHARGEABLE header comment above. Getting this wrong means an offline
+    // classifier permanently parks real candidates for a reason unrelated to their content.
+    const unavailable = verdict.reason.startsWith('unavailable:');
+    hlog('candidates',
+      `propose: ${unavailable ? 'CLASSIFIER UNAVAILABLE' : 'QUARANTINED'} (${verdict.reason}) — `
+      + 'not transmitted; still visible in the local review queue', sessionId);
+    if (opts.fail) {
+      opts.fail.reason = unavailable ? 'unreachable' : 'quarantined';
+      // The CLASS (customer_identifier / secret-unboundable / malformed-field /
+      // uncertain), not just the fact of a quarantine — `detail` is what lets spool.mjs's
+      // `markQuarantined` record WHICH layer/verdict flagged it instead of a constant string that
+      // tells a later reader nothing beyond "something matched".
+      opts.fail.detail = verdict.reason;
+    }
+    return null;
+  }
+  const f = verdict.fields;
   const payload = {
-    title: c.title,
-    body: c.body,
+    title: f.title,
+    body: f.body,
     kind: c.kind,
     sessionId,
     proposedAt: c.proposedAt || new Date().toISOString().slice(0, 10),
@@ -360,9 +422,9 @@ export async function propose(sessionId, c, opts = {}) {
    * attempt landed. `tags` is dropped when empty for the same reason.
    */
   if (c.dest) payload.dest = c.dest;
-  if (c.area) payload.area = c.area;
-  if (c.sourceRef) payload.sourceRef = c.sourceRef;
-  if (Array.isArray(c.tags) && c.tags.length) payload.tags = c.tags;
+  if (f.area) payload.area = f.area;
+  if (f.sourceRef) payload.sourceRef = f.sourceRef;
+  if (Array.isArray(f.tags) && f.tags.length) payload.tags = f.tags;
   // `typeName` + `payload` — see contract 3 in the header. `data` here returns 200 and stores
   // nothing.
   const r = await call('/v1/records?upsert=true',

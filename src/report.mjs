@@ -81,6 +81,10 @@ export { residualFor, isStale, residualBySession, blindSpots, lastCensus };
  *             type is unprovisioned. Not a divergence; it is the backlog doing its job.
  *   parked  — spooled, over the retry budget, will never be attempted again. A REAL LOSS, and the
  *             one number that should be zero.
+ *   quarantined — settled by the redaction gate (→ redact.mjs), NEVER a divergence or a loss: this
+ *             is the gate working as designed (a secret it couldn't bound, a real customer/PII
+ *             identifier). Reported separately so it is never confused
+ *             with `unspooled` (a real dual-write bug) or counted toward `parked`'s "should be 0".
  *   unspooled — in the queue with no spool entry at all. The dual-write did not happen: either
  *             the spool append failed, or the entry predates Phase A (which is most of them at
  *             first, and is why the report separates candidates minted before the cutover).
@@ -128,8 +132,9 @@ export async function compareSession(sid, opts = {}) {
   const s = readSpool(sid);
   const owed = new Set(s.owed.map((e) => e.externalId));
   const parked = new Set(s.parked.map((e) => e.externalId));
+  const quarantined = new Set(s.quarantined.map((e) => e.externalId));
 
-  const missing = { owed: [], parked: [], unspooled: [], divergent: [], settleDivergent: [] };
+  const missing = { owed: [], parked: [], quarantined: [], unspooled: [], divergent: [], settleDivergent: [] };
   for (const [xid, qev] of inQueue) {
     if (inCorpus.has(xid)) {
       /**
@@ -149,6 +154,10 @@ export async function compareSession(sid, opts = {}) {
     }
     if (owed.has(xid)) missing.owed.push(xid);
     else if (parked.has(xid)) missing.parked.push(xid);
+    // Checked BEFORE the `unspooled` fallthrough — a quarantined candidate has a spool entry (it
+    // was gated, not skipped), so `unspooled` (the dual-write-bug bucket: "the spool append never
+    // happened at all") would be a false alarm for the gate working exactly as designed.
+    else if (quarantined.has(xid)) missing.quarantined.push(xid);
     else missing.unspooled.push(xid);
   }
   // A record with no queue entry behind it. Queue-first ordering is supposed to make this
@@ -158,7 +167,7 @@ export async function compareSession(sid, opts = {}) {
   return {
     sid, state: s.state === 'corrupt' ? 'unreadable-spool' : 'ok',
     preCutover, queued: inQueue.size,
-    agreed: inQueue.size - (missing.owed.length + missing.parked.length
+    agreed: inQueue.size - (missing.owed.length + missing.parked.length + missing.quarantined.length
       + missing.unspooled.length + missing.divergent.length + missing.settleDivergent.length),
     missing, orphaned,
   };
@@ -193,6 +202,7 @@ async function compare() {
   console.log(`  queued since the cutover : ${sum('queued')}`);
   console.log(`  in the record corpus     : ${sum('agreed')}`);
   console.log(`  awaiting sync (owed)     : ${sum('owed', true)}   <- expected; the backlog draining`);
+  console.log(`  quarantined (redaction gate) : ${sum('quarantined', true)}   <- expected; the gate working as designed, NOT a loss`);
   console.log(`  PARKED (lost)            : ${sum('parked', true)}   <- should be 0`);
   console.log(`  never spooled            : ${sum('unspooled', true)}   <- should be 0`);
   console.log(`  content MISMATCH (row exists, claim differs): ${sum('divergent', true)}   <- should be 0`);

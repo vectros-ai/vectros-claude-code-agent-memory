@@ -19,7 +19,19 @@ process.env.VECTROS_API_KEY = 'ssk_test_fake_for_unit_tests';
 process.env.VECTROS_MEM_SPOOL_MAX_ATTEMPTS = '2';
 process.env.VECTROS_MEM_SPOOL_FLUSH_MAX_PER_RUN = '2';
 
-const { spool, spoolSupersede, read, markSynced, markFailed, flush, drainAll, listSpools, spoolPath } = await import('../spool.mjs');
+const { spool, spoolSupersede, read, markSynced, markFailed, flush: _flush, drainAll: _drainAll, listSpools, spoolPath } = await import('../spool.mjs');
+/**
+ * This file exercises the SPOOL/RETRY machinery (the fold, the retry budget, the flush receipt)
+ * with a fake `fetchImpl` transport — it is not about the redaction gate `propose()` now runs
+ * first (that has its own focused tests in redact-test.mjs and candidates-test.mjs). Wrapped here
+ * so every `flush`/`drainAll` call below auto-passes a trivial "always send" gate — unless a test
+ * overrides it via its own `opts.gateImpl` — rather than every one of the ~20 call sites in this
+ * file needing to remember to pass one, which is exactly the kind of "everyone remembers" gap this
+ * codebase's own `fetchImpl`/`SPOOL_OFF` seams exist to avoid.
+ */
+const PASS_GATE = async (fields) => ({ send: true, fields });
+const flush = (sid, opts = {}) => _flush(sid, { gateImpl: PASS_GATE, ...opts });
+const drainAll = (sid, opts = {}) => _drainAll(sid, { gateImpl: PASS_GATE, ...opts });
 const { spoolOffFile, verdictMutationsOffFile } = await import('../paths.mjs');
 // The latch path is PER-CONTEXT (keyed by API base URL), so the module owns it — a test that
 // addressed the bare paths.mjs name would be creating and deleting a file nothing reads.
@@ -443,6 +455,85 @@ console.log('\n=== 13. a REVISE also retires the candidate it corrects ===');
   const r2 = await flush(SID, { fetchImpl: empty });
   eq('a missing target is treated as done, not retried forever', r2.synced, 1);
   eq('...and parks nothing', read(SID).parked.length, 0);
+  /**
+   * LOAD-BEARING: a REVISE whose corrector is ITSELF quarantined must not retire the claim it was
+   * correcting. `spoolSupersede` is spooled unconditionally whenever a capture carries `revises` —
+   * before anything is known about whether the corrector's own write will ever land. Without the
+   * fix this proves, applying the supersede anyway would mark the ORIGINAL `supersededBy` a
+   * correction that never reached the store: the original drops out of review (superseded), the
+   * correction doesn't exist anywhere, and nothing is left for a human to read.
+   */
+  reset();
+  const quarantineGate = async () => ({ send: false, reason: 'quarantined:customer_identifier' });
+  const wouldLeak = async () => { throw new Error('the supersede must never reach the network once its corrector is quarantined'); };
+  spool(SID, 's:new2', { title: 'the corrected claim', revises: 's:old2' });
+  spoolSupersede(SID, 's:old2', 's:new2');
+  const r3 = await flush(SID, { fetchImpl: wouldLeak, gateImpl: quarantineGate });
+  eq('the corrector settles as quarantined', r3.quarantined, 2, JSON.stringify(r3));
+  const s3 = read(SID);
+  eq('nothing is left owed', s3.owed.length, 0);
+  eq('nothing is parked', s3.parked.length, 0);
+  check('BOTH the corrector and its supersede entry are recorded as quarantined',
+    s3.quarantined.map((e) => e.externalId).sort().join(',') === 's:new2,sup:s:old2',
+    JSON.stringify(s3.quarantined));
+  const supEntry = s3.quarantined.find((e) => e.externalId === 'sup:s:old2');
+  eq("the supersede's own reason names WHY — its corrector was quarantined, not a judgment of its own",
+    supEntry?.why, 'corrector-quarantined');
+}
+
+console.log('\n=== 14. a quarantine verdict settles on the FIRST attempt, never retried ===');
+{
+  /**
+   * LOAD-BEARING (redaction gate, propose()'s CHARGEABLE/quarantine split). The classifier behind
+   * the redaction gate is a SAMPLED model call, not a deterministic check — so retrying a quarantine
+   * verdict on a later flush is not "trying the same bytes again", it is drawing again from a
+   * distribution. Before this fix, a quarantine was charged through the generic CHARGEABLE path and
+   * re-classified on every flush up to SPOOL_MAX_ATTEMPTS times; any ONE lucky "clean" draw among
+   * those retries would have shipped it. This test proves the fix: one flush settles it for good,
+   * and NO amount of further flushing ever calls the gate — or the network — again.
+   */
+  reset();
+  spool(SID, 'q1', cand(1));
+  let gateCalls = 0;
+  const quarantineGate = async () => { gateCalls++; return { send: false, reason: 'quarantined:customer_identifier' }; };
+  const f = fake(okWrite); // would prove a leak if ever actually called
+  const r1 = await flush(SID, { fetchImpl: f.impl, gateImpl: quarantineGate });
+  eq('the first flush settles it (attempted, not deferred)', r1.attempted, 1);
+  eq('...counted as quarantined, not failed', r1.quarantined, 1);
+  eq('...and NOT as failed (it is not on the chargeable/retry path)', r1.failed, 0);
+  const s1 = read(SID);
+  eq('nothing is left owed', s1.owed.length, 0);
+  eq('nothing is parked (a quarantine is not a loss)', s1.parked.length, 0);
+  eq('it IS recorded as quarantined', s1.quarantined.length, 1);
+  eq('...by the right externalId', s1.quarantined[0].externalId, 'q1');
+  // The recorded reason must be the ACTUAL class the gate returned, not a constant — a later
+  // reader of the spool file needs to know WHICH verdict flagged it, not just that one did.
+  eq("...with the real verdict class recorded, not a constant 'redaction-gate' placeholder",
+    s1.quarantined[0].why, 'quarantined:customer_identifier');
+  check('the classifier gate was asked exactly once', gateCalls === 1, `gateCalls=${gateCalls}`);
+  check('the network was never touched', f.calls.length === 0, JSON.stringify(f.calls));
+
+  // Flush again, several times — nothing should be owed, so the gate must never be asked again.
+  for (let i = 0; i < 5; i++) await flush(SID, { fetchImpl: f.impl, gateImpl: quarantineGate });
+  check('further flushes never re-invoke the gate — the verdict is TERMINAL', gateCalls === 1, `gateCalls=${gateCalls}`);
+  check('further flushes never touch the network either', f.calls.length === 0);
+  eq('still exactly one quarantined entry, not re-counted', read(SID).quarantined.length, 1);
+}
+{
+  // The classifier being UNAVAILABLE is the opposite case: it must behave exactly like any other
+  // environment failure (halt, free retry), never settle as quarantined.
+  reset();
+  spool(SID, 'u1', cand(1));
+  const unavailableGate = async () => ({ send: false, reason: 'unavailable:classifier' });
+  const f = fake(okWrite);
+  const r = await flush(SID, { fetchImpl: f.impl, gateImpl: unavailableGate });
+  eq('an unavailable classifier is not charged', r.failed, 0);
+  eq('...and not quarantined either — nothing was judged', r.quarantined, 0);
+  eq('...the flush halts and says why', r.halted, 'unreachable');
+  const s = read(SID);
+  eq('the entry stays owed for a free retry', s.owed.length, 1);
+  eq('...at zero attempts', s.owed[0].attempts, 0);
+  eq('nothing is quarantined', s.quarantined.length, 0);
 }
 
 reset();

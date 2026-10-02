@@ -3,6 +3,22 @@
 All notable changes to `@vectros-ai/claude-code-agent-memory` are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.14.0 — 2026-10-01
+
+Pre-1.0 / beta.
+
+### Added
+
+- **Every candidate passes a local content gate before it is transmitted.** Secrets in known formats (AWS
+  access keys, API keys and tokens, JWTs, `scheme://user:pass@host` connection strings, private-key blocks) are
+  replaced with `[REDACTED]` and the rest of the lesson is sent. A candidate that contains a US Social Security
+  number-shaped or payment-card-shaped number, or that a small model call, made through your own Claude Code,
+  judges to describe a real, identifiable individual or organization, is withheld and never transmitted; it stays in the local capture log. If the model call is
+  unavailable, the candidate is held and retried later. The gate is a best-effort filter and does not recognize
+  every secret or personal-data format.
+- **Two new settings for the gate's model call:** `VECTROS_MEM_CLASSIFIER_TIMEOUT_MS` (time budget per candidate,
+  default 25000) and `VECTROS_MEM_CLASSIFIER_MODEL` (default: the capture model).
+
 ## 0.13.1 — 2026-09-17
 
 Pre-1.0 / beta.

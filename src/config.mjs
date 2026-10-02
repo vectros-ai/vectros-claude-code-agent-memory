@@ -618,6 +618,32 @@ export const SPEC = {
       + 'every caller already refuses to act on) rather than a silently truncated enumeration, '
       + 'because a partial review queue is indistinguishable from a short one.',
   },
+  /**
+   * ── THE REDACTION GATE (candidate content scan before transmission). → redact.mjs, called from
+   * `propose()` — the single choke point every write path (live capture, recovery/backfill) funnels
+   * through, so this is not something a caller can bypass by skipping a step.
+   */
+  CLASSIFIER_TIMEOUT_MS: {
+    def: 25_000,
+    env: 'VECTROS_MEM_CLASSIFIER_TIMEOUT_MS',
+    // The input is tiny (one distilled candidate, under ~1.5KB), but the budget is dominated by the
+    // nested `claude -p` process itself, not the model: measured 5-13s per call for a one-token
+    // verdict (process start-up plus one API round trip). A 10s budget timed out most real calls,
+    // which fails closed but stalls every candidate. 25s is ~2x the worst measured call. The upper
+    // rail is deliberately looser than the drain-cost invariant below: any value above 30s at the
+    // default caps is applied but reported as a violated constraint, not silently accepted.
+    parse: posInt(2_000, 60_000),
+    note: 'measured 5-13s per call, dominated by the nested `claude -p` process — per-candidate budget for the classifier pass that judges whether a candidate '
+      + 'describes a real, identifiable individual (customer/PII) — a class no pattern/regex scan '
+      + 'can reach. On timeout the classifier is treated as '
+      + 'UNAVAILABLE (an environment failure, not a verdict — the candidate is never transmitted but '
+      + 'is retried once the environment recovers, never charged against its retry budget); a reply '
+      + 'that runs but cannot be parsed is treated as an "uncertain" VERDICT instead (definitive, '
+      + 'quarantined, never retried) — see redact.mjs\'s `classify()` for the distinction. Both fail '
+      + 'CLOSED rather than open, the opposite default from every other timeout in this file: those '
+      + 'protect availability (a slow recall should not block a turn), this one protects against '
+      + 'shipping unclassified content.',
+  },
   QUEUE_BODY_MAX_CHARS: {
     def: 4_000,
     env: 'VECTROS_MEM_QUEUE_BODY_MAX_CHARS',
@@ -991,6 +1017,38 @@ export const CONSTRAINTS = [
       + 'Raise LOCK_STALE_MS above the product, or lower the drain.',
   },
   {
+    // The redaction gate's own term in the same budget the entry above checks — added alongside
+    // the gate itself, since a per-candidate classifier call is new cost in the same detached
+    // worker the lock above already has to bound. IMPORTANT: the classifier does NOT run inside
+    // the window loop (an earlier version of this constraint wrongly modeled it that way, against
+    // a since-removed MAX_CANDIDATES_PER_WINDOW cap that didn't bound the real cost and just lost
+    // captures for nothing — see git history if you're wondering where that knob went). It runs
+    // once, AFTER the whole window loop, inside `drainAll()`'s flush of owed spool entries — so its
+    // real worst case is bounded by how many spool entries one drain will attempt
+    // (SPOOL_DRAIN_MAX_SESSIONS x SPOOL_FLUSH_MAX_PER_RUN), each costing up to CLASSIFIER_TIMEOUT_MS
+    // (the gate) plus CANDIDATE_TIMEOUT_MS (the network write attempted right after it) — not by
+    // anything about the window that produced the candidate.
+    name: 'MAX_WINDOWS_PER_RUN x CAPTURE_CLAUDE_TIMEOUT_MS + SPOOL_DRAIN_MAX_SESSIONS x SPOOL_FLUSH_MAX_PER_RUN x (CLASSIFIER_TIMEOUT_MS + CANDIDATE_TIMEOUT_MS) <= LOCK_STALE_MS',
+    kind: 'warn',
+    holds: (v) => v.MAX_WINDOWS_PER_RUN * v.CAPTURE_CLAUDE_TIMEOUT_MS
+      + v.SPOOL_DRAIN_MAX_SESSIONS * v.SPOOL_FLUSH_MAX_PER_RUN * (v.CLASSIFIER_TIMEOUT_MS + v.CANDIDATE_TIMEOUT_MS)
+      <= v.LOCK_STALE_MS,
+    why: (v) => {
+      const windows = v.MAX_WINDOWS_PER_RUN * v.CAPTURE_CLAUDE_TIMEOUT_MS;
+      const drain = v.SPOOL_DRAIN_MAX_SESSIONS * v.SPOOL_FLUSH_MAX_PER_RUN * (v.CLASSIFIER_TIMEOUT_MS + v.CANDIDATE_TIMEOUT_MS);
+      return `the window loop's worst case is ${Math.round(windows / 60_000)} min, and the drain that `
+        + `follows it can attempt ${v.SPOOL_DRAIN_MAX_SESSIONS} x ${v.SPOOL_FLUSH_MAX_PER_RUN} = `
+        + `${v.SPOOL_DRAIN_MAX_SESSIONS * v.SPOOL_FLUSH_MAX_PER_RUN} spool entries, each up to `
+        + `${Math.round((v.CLASSIFIER_TIMEOUT_MS + v.CANDIDATE_TIMEOUT_MS) / 1000)}s (classify + write) = `
+        + `${Math.round(drain / 60_000)} more min — ${Math.round((windows + drain) / 60_000)} min total `
+        + `against a ${Math.round(v.LOCK_STALE_MS / 60_000)} min LOCK_STALE_MS. Past that, the sweep `
+        + 'declares a LIVE worker dead, clears its lock, and spawns a DUPLICATE BILLED distiller against '
+        + 'the same session — the same race the windows x distill-timeout entry above exists to catch, '
+        + 'reachable here through the drain instead. Raise LOCK_STALE_MS, or lower the drain caps / '
+        + 'CLASSIFIER_TIMEOUT_MS.';
+    },
+  },
+  {
     name: 'REAP_PHANTOM_AFTER_MS <= REAP_STATE_AFTER_MS <= REAP_QUEUE_AFTER_MS',
     kind: 'warn',
     holds: (v) => v.REAP_PHANTOM_AFTER_MS <= v.REAP_STATE_AFTER_MS && v.REAP_STATE_AFTER_MS <= v.REAP_QUEUE_AFTER_MS,
@@ -1274,6 +1332,7 @@ export const PROJECT_HOOK_MAX_CHARS = V.PROJECT_HOOK_MAX_CHARS;
 export const CANDIDATE_TIMEOUT_MS = V.CANDIDATE_TIMEOUT_MS;
 export const CANDIDATE_PAGE_LIMIT = V.CANDIDATE_PAGE_LIMIT;
 export const CANDIDATE_MAX_PAGES = V.CANDIDATE_MAX_PAGES;
+export const CLASSIFIER_TIMEOUT_MS = V.CLASSIFIER_TIMEOUT_MS;
 export const QUEUE_BODY_MAX_CHARS = V.QUEUE_BODY_MAX_CHARS;
 export const CANDIDATE_SCHEMA_RECHECK_MS = V.CANDIDATE_SCHEMA_RECHECK_MS;
 export const SPOOL_MAX_ATTEMPTS = V.SPOOL_MAX_ATTEMPTS;
