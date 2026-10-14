@@ -43,6 +43,7 @@ import { hlog } from './hooklog.mjs';
 import { lockFor, queueDir, stateDir, sweepMarker, slug, SID_DISPLAY_LEN } from './paths.mjs';
 import { read as readQueue, markSwept } from './queue.mjs';
 import { isHeld, claim, release } from './lock.mjs';
+import { excludedSessionCheck } from './exclusion.mjs';
 // NOT `noteSkip`: this module deliberately routes its receipts to `hlog` instead — the blind-spot
 // ledger is printed only by report.mjs, and the orphan scan runs inside a per-prompt process that
 // exits without reading it. → `orphanedPending`.
@@ -307,7 +308,7 @@ export function planClaimRenewals({ orphans = [], pick = null, delivered = false
  * and two agents settling one queue is how a candidate gets disposed twice on two different
  * judgements. This is a scoped widening of the candidate-pressure trigger, not a global one.
  */
-export function orphanedPending(nowMs, { staleMs, stateDir, queueDir, forSid = null, readQueue: readQ = readQueue, listQueues = defaultListQueues, readLastStopAt = defaultReadLastStopAt, handedTtlMs = HANDED_TTL_MS } = {}) {
+export function orphanedPending(nowMs, { staleMs, stateDir, queueDir, forSid = null, readQueue: readQ = readQueue, listQueues = defaultListQueues, readLastStopAt = defaultReadLastStopAt, handedTtlMs = HANDED_TTL_MS, isExcluded = excludedSessionCheck() } = {}) {
   // (`HANDED_TTL_MS` lives in config.mjs's SPEC with its three sweep siblings — it is an n=0 guess
   //  and the one an operator turns when a stranded claim blocks a queue, which is exactly what that
   //  seam is for. It was briefly a bare source `const` here, bypassing the file's own
@@ -350,6 +351,9 @@ export function orphanedPending(nowMs, { staleMs, stateDir, queueDir, forSid = n
     if (q.state === 'corrupt') { hlog('sweep', `orphan scan: queue ${String(sid).slice(0, SID_DISPLAY_LEN)} UNREADABLE — cannot tell whether it has pending candidates; not surfacing it`); continue; }
     if (!q.pending.length) continue;
     if (q.sweptAt === null || q.sweptAt === undefined) continue; // never flushed — not ours to hand on
+    // A session that originated in an excluded directory is never offered to another agent: settling
+    // its candidates would turn them into records, which is what the exclusion exists to prevent.
+    if (isExcluded(sid, { queueDirs: [q.cwd, q.projectDir].filter(Boolean) })) continue;
     /**
      * THE CROSS-SESSION CLAIM. Someone else is already holding this queue, so we do not also offer
      * it — one dead session's candidates must reach ONE live agent, not every idle one. Our OWN
@@ -477,6 +481,7 @@ export function runSweep(currentSid, nowMs, opts = {}) {
   const _isHeld = d.isHeld || isHeld;
   const _markSwept = d.markSwept || markSwept;
   const _enumerate = d.residualBySession || residualBySession;
+  const _isExcluded = d.isExcluded || excludedSessionCheck();
   const nil = { scanned: 0, flushed: 0, deferred: 0, blocked: 0 };
 
   const { due, ageMs } = sweepDue(marker, nowMs, debounceMs);
@@ -495,7 +500,7 @@ export function runSweep(currentSid, nowMs, opts = {}) {
   // `stats` collects what the enumerator DROPPED, so the receipt below can name the real cause
   // rather than the only cause `skipped` can still see. → residual.mjs skipSwept.
   const stats = {};
-  const rows = _enumerate(nowMs, { ...(d.enumDeps || {}), minAgeMs: staleMs, skipSwept: true, stats });
+  const rows = _enumerate(nowMs, { ...(d.enumDeps || {}), minAgeMs: staleMs, skipSwept: true, stats, isExcluded: _isExcluded });
   // `deferred` is deliberately NOT taken from here — see `reallyDeferred` below. The cap-shaped
   // slice is right only if the loop consumes the head in order, and it no longer does.
   const { eligible, skipped } = selectFlushable(rows, { nowMs, staleMs, floorChars, currentSid, max });
@@ -540,6 +545,7 @@ export function runSweep(currentSid, nowMs, opts = {}) {
      */
     const parts = [];
     if (stats.skippedSwept) parts.push(`${stats.skippedSwept} already flushed this idle episode`);
+    if (stats.excluded) parts.push(`${stats.excluded} left alone because they originated in an excluded directory`);
     const gateTally = Object.entries(by).map(([w, n]) => `${n} ${w}`).join(', ');
     if (gateTally) parts.push(gateTally);
     /**

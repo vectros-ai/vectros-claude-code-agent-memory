@@ -3,6 +3,81 @@
 All notable changes to `@vectros-ai/claude-code-agent-memory` are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.15.0 — 2026-10-12
+
+Pre-1.0 / beta.
+
+To use this version, update the package and run `claude-code-agent-memory init` again: the hooks run from the deployed
+copy, not from the installed package.
+
+### Added
+
+- **Keep a project or directory out of recall and capture.** Two switches exclude a session: the
+  `VECTROS_MEMORY_OFF=1` environment variable (for one project, put it in that project's `.claude/settings.local.json`
+  and check for the `optout` line in `hooks.log`),
+  and directory lists in `config.json`. `EXCLUDED_DIRECTORIES` excludes the listed directories and
+  everything beneath them. `INCLUDED_DIRECTORIES`, when present and non-empty, restricts memory to
+  sessions under its entries; an excluded directory wins over an included one. Matching ignores
+  separator style and trailing separators, is case-insensitive on Windows and macOS, resolves symlinks
+  and junctions, never matches a sibling that merely shares a prefix (`C:\work\clientA` does not
+  cover `C:\work\clientAX`), understands trailing-dot and 8.3 spellings and the `\\?\` form of a session's directory on Windows (a `\\?\` or `\\.\` entry in a list is refused), and considers both the session's working directory and the directory
+  Claude Code was started in. A session that moves into or out of an excluded directory partway through is excluded only while it is there: what it did outside, and the stretch inside once it moves back out, can still be captured. Start the session in the directory to keep all of it out.
+- **An excluded session makes no network call, reads no transcript, writes no state, queue, staging or
+  spool file and starts no background process.** Each excluded session start leaves one line in `hooks.log`
+  naming the reason; it never contains the directory, a prompt or tool content.
+- **The background work that covers other sessions skips sessions that started in an excluded directory:** the sweep of idle sessions' unread tails, the cross-session orphan nudge, the orphan cap and the spool drain, judged against the
+  lists as they stand when the work runs. A session's working directory and project directory are recorded in its local state at its first reply and in its queue at its first capture. A session is skipped if either is under an excluded directory,
+  and an included list admits it only if both are inside it. A session captured before directories were recorded is matched against an excluded list by Claude Code's per-project transcript folder name (an approximation that can also skip a sibling directory whose name continues with `-`), and an included list does not
+  admit a session with no recorded directory.
+- **The `MEMORY.md` pinned-set refresh honours the same lists.** It writes only into the memory index of a project that
+  is allowed: it never writes into the index of a repository that has an excluded directory in it: the repository
+  or any of its working trees under an excluded directory, an excluded directory inside the repository or inside one of
+  its working trees, and, when `INCLUDED_DIRECTORIES` is set, a repository with a working tree outside it, whichever
+  session triggered the refresh (the index is shared by every working tree of the repository). The index is never
+  guessed from the projects folder while either list is set, so a session outside any repository does not refresh a
+  pinned set then, and neither does one in a repository that has no memory index under its own project folder.
+  Claude Code's project folder name (every non-alphanumeric character of the path becomes a `-`, so a path containing
+  `_`, `.` or a space is found too) is an
+  encoding that different paths share (`/w/acme-corp` and `/w/acme/corp` encode alike), so the refresh also stops when an
+  excluded directory's folder name equals the repository's or continues it or is continued by it at a `-` (this also
+  stops it for a sibling that merely shares such a prefix); with `INCLUDED_DIRECTORIES` set it stops when a session
+  recorded in the repository's own project folder ran outside the included directories (a session started in a
+  sub-directory or another working tree is recorded under a different folder name and is not seen).
+  `VECTROS_MEMORY_OFF` stops the refresh too. The refusal is one line in `hooks.log`.
+- **`CLAUDE.md.sample` has a section for excluded projects**: nothing is recalled on purpose, the agent
+  must not search the knowledge base for the project's work, and must not store anything from the
+  session in it. The hooks cannot enforce that for an agent that has knowledge-base tools, so it is an
+  instruction to put in the excluded project's own `CLAUDE.md`.
+
+### Changed
+
+- **A broken `config.json` turns memory off for every session.** If it cannot be read or parsed, or
+  a directory list is not an array of absolute paths (relative, `~`, drive-relative, `\\?\` and `\\.\` entries, and
+  entries containing a NUL byte, are refused), or a key looks like one of the two lists but is spelled differently (for
+  example `excludedDirectories`), every hook skips its work until the file is fixed. The cause is shown in the session at start and is written to `hooks.log` by every hook until the file is fixed;
+  a file saved as UTF-16 and a Windows path with unescaped backslashes are named specifically. A UTF-8
+  byte-order mark is accepted. Every other setting keeps its fail-open default. A config file that was
+  already malformed therefore now turns memory off instead of falling back to defaults.
+- **Source comments state their rules themselves.** Comments that pointed at internal design documents now say what
+  the rule is, so the source maps that ship with the package read on their own. No behavior changes.
+
+### Fixed
+
+- **`dispose.mjs` accepts `documented:<path>` and `ignored:covered:<path>` in an ordinary project.** A path is checked
+  against your project, normally the git working tree you run the command from, so it works in any git project, from
+  any subdirectory, and stores the path relative to the top of that tree. A path outside the project is still refused,
+  as is every path from a directory that holds several checkouts without being inside a repository, and every path
+  from the runtime directory or a directory beneath it. A path is also refused when it lies in a repository nested
+  below the project or is reached through a link that leads outside it, and a git working tree nested below another
+  project is a project of its own.
+- **A session whose transcript grows past about 512 MiB keeps being captured.** A transcript is read in
+  chunks, so a session above that size is measured and distilled like any other, and the mid-run recall
+  evaluator reads from the end of the file. The time to read grows with the size of the file and memory does
+  not. A single line longer than about 512 MiB still cannot be read.
+- **After you upgrade, a session that was skipped because of its size is captured again from where its capture
+  stopped** (from its start, if it was never captured). Each run distils a limited amount and each window costs at
+  least one model call made through your own Claude Code, so a long backlog in a session you keep using is worked off over several turns; a session that has already ended is caught up by one background run of limited size, and the rest is captured if you resume the session.
+
 ## 0.14.0 — 2026-10-01
 
 Pre-1.0 / beta.

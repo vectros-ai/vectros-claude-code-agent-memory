@@ -12,10 +12,12 @@
  *
  * Emits nothing; never blocks. Self-contained.
  */
+import { stdinText } from './optout.mjs'; // FIRST: the opt-out guard runs before anything below
 import fs from 'node:fs';
 import { hlog } from './hooklog.mjs';
 import { readState, writeState } from './state.mjs';
 import { stateDir } from './paths.mjs';
+import { originDirs } from './exclusion.mjs';
 import { STASH_CHARS } from './config.mjs';
 
 // Re-entrance guard: no-op inside the mid-run evaluator's own nested `claude -p`
@@ -23,19 +25,9 @@ import { STASH_CHARS } from './config.mjs';
 if (process.env.VECTROS_RECALL_EVAL === '1') process.exit(0);
 
 
-function readStdin() {
-  return new Promise((resolve) => {
-    let data = '';
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (c) => (data += c));
-    process.stdin.on('end', () => resolve(data));
-    process.stdin.on('error', () => resolve(''));
-  });
-}
-
 async function main() {
   let input;
-  try { input = JSON.parse(await readStdin()); } catch { hlog('stop', 'skip: unparseable stdin'); return; }
+  try { input = JSON.parse(stdinText); } catch { hlog('stop', 'skip: unparseable stdin'); return; }
   const msg = (input.last_assistant_message || input.assistant_message || '').toString();
   const sessionId = input.session_id || 'nosession';
   /**
@@ -92,6 +84,13 @@ async function main() {
   // preserves both fields across every OTHER hook's write (defaults are spread UNDER the parsed
   // file), so only this line needs to set them.
   if (input.transcript_path) state.transcriptPath = input.transcript_path;
+  // Where the session ORIGINATED, recorded alongside the path that admits it to the sweep, so the
+  // sweep can honour the opt-out list for a session that has since ended. FIRST WINS: the field
+  // answers "where did this start", and a later Stop from another directory must not move it.
+  // BOTH the working directory and the project directory: either can be what a later exclusion names.
+  const origin = originDirs(input);
+  if (!state.cwd && origin.cwd) state.cwd = origin.cwd;
+  if (!state.projectDir && origin.projectDir) state.projectDir = origin.projectDir;
   state.lastStopAt = Date.now();
   // Refuse only on UNREADABLE: a torn read hands back defaults, and publishing them erases promptCount /
   // injectedIds / orientPending to store one tail. The tail is re-stashed next turn; they are not.

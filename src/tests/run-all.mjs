@@ -15,7 +15,7 @@
  * instead of remembered, which is the entire thesis of this project applied to its own suite.
  *
  *   node run-all.mjs           # the deterministic suite
- *   node run-all.mjs --all     # + the *-real-test.mjs files (REAL Haiku calls, ~$0.30)
+ *   node run-all.mjs --all     # + the *-real-test.mjs files (real Haiku calls, ~$0.30; one writes about 536 MiB to a temp file)
  *   VECTROS_MEM_TEST_ALL=1 node run-all.mjs   # same opt-in, for CI — see below
  *
  * THE ENV VAR EXISTS SO CI CAN OPT IN AT ALL. `--all` alone means only a human typing it
@@ -231,7 +231,7 @@ for (const f of files) {
 
 if (!withReal) {
   const real = fs.readdirSync(HERE).filter((f) => f.endsWith('-real-test.mjs'));
-  if (real.length) skipped.push(`${real.length} *-real-test.mjs (real Haiku calls) — run with --all or VECTROS_MEM_TEST_ALL=1`);
+  if (real.length) skipped.push(`${real.length} *-real-test.mjs (real model calls and a test that writes about 536 MiB to a temp file) — run with --all or VECTROS_MEM_TEST_ALL=1`);
 }
 
 console.log('');

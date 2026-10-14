@@ -36,28 +36,140 @@ import { cred } from './creds.mjs';
 import { hlog } from './hooklog.mjs';
 import { orphanedEditsDir, projectionLog, projectsDir } from './paths.mjs';
 import { writeFileAtomic } from './atomic.mjs';
-import { PINNED_LIMIT, PINNED_MIN_PRIORITY, PROJECT_HOOK_MAX_CHARS, PROJECT_TIMEOUT_MS } from './config.mjs';
+import { dirUnder, dirWithin, encodeProjectDir, normalizeDir, optOutEnvOn } from './exclusion.mjs';
+import { optOutConfig, PINNED_LIMIT, PINNED_MIN_PRIORITY, PROJECT_HOOK_MAX_CHARS, PROJECT_TIMEOUT_MS } from './config.mjs';
 
+
+/**
+ * Why the memory index owned by the project at `root` must not be written, or '' when it may be.
+ *
+ * The index belongs to the git root and is auto-loaded by EVERY session of that repository: one
+ * in the root, in a subdirectory, or in any linked working tree. So the lists are applied to all
+ * of them, in both directions: the index is refused when the root or any working tree is under an
+ * excluded directory, AND when an excluded directory sits at or under the root or any working tree
+ * (an excluded subdirectory, or an excluded linked working tree of a root that is not itself
+ * excluded). With an allow-list, every one of those trees has to be inside it.
+ */
+function indexRefusal(root, lists, folder) {
+  const trees = [root];
+  let listed = true;
+  try {
+    const env = { ...process.env };
+    for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_NAMESPACE']) delete env[k];
+    const out = execFileSync('git', ['worktree', 'list', '--porcelain', '-z'], {
+      cwd: root, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, timeout: 5000,
+    });
+    // NUL-separated, so a path with a newline in it stays in one piece.
+    for (const field of out.split(String.fromCharCode(0))) if (field.startsWith('worktree ')) trees.push(path.resolve(field.slice('worktree '.length)));
+  } catch { /* silence-ok: the failure is handled just below, where it becomes a refusal whenever a list is set; without a list there is nothing to apply, so the root alone is enough. */ listed = false; }
+  if (!listed && (lists.dirs.length || lists.included.length)) {
+    return 'git could not list the working trees of the repository, so the directory lists cannot be applied to all of them';
+  }
+  if (lists.dirs.length) {
+    // Claude Code's folder name is a lossy encoding of a path (`/w/acme-corp` and `/w/acme/corp` encode
+    // alike), and a session in an excluded directory loads the index of ITS git root's folder. So an excluded
+    // directory whose encoding equals this folder, sits beneath it by name (`/w/acme` excluded, repository
+    // `/w/acme-corp`), or contains it by name (`/w/acme/corp/client` excluded, repository `/w/acme-corp`) may
+    // share the index. The comparison is the same lossy, over-refusing one the sweep applies to a session
+    // that recorded no directory: it errs towards not writing.
+    if (lists.dirs.some((d) => namesOverlap(encodeDir(d), folder))) {
+      return 'an excluded directory has the same project folder name as this repository, or one that continues it, so they may share one memory index';
+    }
+    if (trees.some((t) => dirUnder(t, lists.dirs) || lists.dirs.some((d) => dirUnder(d, [t])))) {
+      return 'a project that shares the memory index is under, or contains, an excluded directory';
+    }
+  }
+  if (lists.included.length) {
+    if (!trees.every((t) => dirWithin(t, lists.included))) {
+      return 'a project that shares the memory index is not under an included directory';
+    }
+    // A folder name is only an encoding that other paths share. If a session recorded in THIS folder ran
+    // outside the included directories, some other path shares the index: refuse. (A session started in a
+    // sub-directory is recorded under another folder name, so this catches what it can see, no more.)
+    if (folderHoldsSessionOutside(path.join(projectsDir(), folder), lists.included)) {
+      return 'an included-directories list is set and a session recorded in the project folder ran outside it';
+    }
+  }
+  return '';
+}
+
+const encodeDir = (d) => encodeProjectDir(normalizeDir(d));
+const foldsCase = process.platform === 'win32' || process.platform === 'darwin';
+const foldName = (s) => (foldsCase ? String(s).toLowerCase() : String(s));
+const namesOverlap = (a, b) => {
+  const x = foldName(a); const y = foldName(b);
+  return x === y || x.startsWith(y + '-') || y.startsWith(x + '-');
+};
+
+/**
+ * True when a session recorded in a Claude Code project folder ran outside the `included` directories: it
+ * reads the working directory from the head of up to five of the most recently written transcripts. A
+ * folder with no readable transcript shows nothing and is not counted against the repository.
+ */
+function folderHoldsSessionOutside(folderPath, included) {
+  let files;
+  try {
+    files = fs.readdirSync(folderPath).filter((f) => f.endsWith('.jsonl'))
+      .map((f) => ({ f, t: fs.statSync(path.join(folderPath, f)).mtimeMs }))
+      .sort((a, b) => b.t - a.t).slice(0, 5).map((x) => x.f);
+  } catch { /* silence-ok: an unreadable or absent folder holds no evidence against the repository. */ return false; }
+  for (const f of files) {
+    let head = '';
+    try {
+      const fd = fs.openSync(path.join(folderPath, f), 'r');
+      try { const buf = Buffer.alloc(65536); head = buf.toString('utf8', 0, fs.readSync(fd, buf, 0, buf.length, 0)); } finally { fs.closeSync(fd); }
+    } catch { /* silence-ok: an unreadable transcript shows nothing; the count below decides. */ continue; }
+    // Scanned by hand rather than with a regular expression: the lint that guards the hooks does not parse
+    // regex literals, and a quote inside one unbalances the file for it.
+    const key = '"cwd":"';
+    const at = head.indexOf(key);
+    if (at < 0) continue;
+    let end = at + key.length;
+    while (end < head.length && head[end] !== '"') end += head[end] === '\\' ? 2 : 1;
+    let cwd; try { cwd = JSON.parse('"' + head.slice(at + key.length, end) + '"'); } catch { /* silence-ok: an undecodable value shows nothing. */ continue; }
+    if (!dirWithin(cwd, included)) return true;
+  }
+  return false;
+}
 
 /**
  * Locate the harness's auto-memory index. NEVER hardcode it (an earlier cut pinned one
  * machine's literal path — benign here, but it would silently write to a file nobody loads if
  * the harness ever resolved elsewhere, and it is meaningless to any other user of this code).
  *
- * The harness slugs a project path by replacing `:` `\` `/` with `-`
- * (`C:\Users\me\IdeaProjects\monorepo` -> `C--Users-me-IdeaProjects-monorepo`) and stores
- * `<slug>/memory/`. Memory is keyed to the GIT ROOT, not the cwd, which is why every sibling
+ * The harness names a project's folder by replacing EVERY non-alphanumeric character of its path with `-`
+ * (`C:\Users\me\IdeaProjects\monorepo` -> `C--Users-me-IdeaProjects-monorepo`, `C:\Users\me\tmp_check.v1 x`
+ * -> `C--Users-me-tmp-check-v1-x`; `encodeProjectDir` in exclusion.mjs) and stores `<folder>/memory/`. Memory is keyed to the GIT ROOT, not the cwd, which is why every sibling
  * WORKTREE shares one store: worktrees share a git common dir, so they all resolve to the main
  * worktree. (Verified: 176 project dirs on this machine, 175 transcripts-only, exactly ONE
  * `memory/`.)
  *
  * Resolution order, and we only ever return a path that ALREADY EXISTS — so a wrong guess
  * degrades to "do nothing" instead of conjuring a phantom memory dir the harness never reads.
+ *
+ * THE TARGET PROJECT HAS TO BE ALLOWED, not just the session. The pinned set is written into a
+ * file that is auto-loaded by every session started in the project that owns it, so writing it
+ * into an excluded project's index recalls memory into exactly the sessions the exclusion list
+ * exists to keep it out of. The hook that spawns this has already checked the SESSION; this checks
+ * where the write LANDS, which differs whenever the session is in one place and the memory index
+ * in another: a worktree whose main checkout is excluded, or a session outside any repository that
+ * the single-index fallback below would otherwise point at some other project.
+ *
+ * Returns `{ index, why }`: the path (or '') and, when it is '', the reason, so the receipt says
+ * which rule refused.
  */
-function resolveMemoryIndex() {
-  if (process.env.VECTROS_MEMORY_INDEX) return process.env.VECTROS_MEMORY_INDEX; // tests/escape hatch
+export function resolveMemoryIndex() {
+  if (optOutEnvOn()) return { index: '', why: 'VECTROS_MEMORY_OFF is set' };
+  // The tests' escape hatch. It is undocumented on purpose and it BYPASSES the directory lists below: whoever
+  // sets it names the file to write, so the lists have nothing left to decide.
+  if (process.env.VECTROS_MEMORY_INDEX) return { index: process.env.VECTROS_MEMORY_INDEX, why: '' };
+
+  const lists = optOutConfig();
+  // Lists that cannot be read cannot be honoured, and every hook is off until they are fixed.
+  if (lists.problem) return { index: '', why: 'the directory lists cannot be read (every hook is off until config.json is fixed)' };
 
   // 1. Derive from the git root (the main worktree, shared by every sibling worktree).
+  let derivedMiss = false;
   try {
     const common = execFileSync('git', ['rev-parse', '--git-common-dir'], {
       encoding: 'utf8',
@@ -66,20 +178,36 @@ function resolveMemoryIndex() {
       timeout: 5000,     // never let a wedged git hang a hook — fall through to discovery instead
     }).trim();
     const root = path.dirname(path.resolve(common));       // .../monorepo/.git -> .../monorepo
-    const slug = root.replace(/[:\\/]/g, '-');
+    const slug = encodeProjectDir(root);
     const p = path.join(projectsDir(), slug, 'memory', 'MEMORY.md');
-    if (fs.existsSync(p)) return p;
+    if (fs.existsSync(p)) {
+      const why = indexRefusal(root, lists, slug);
+      return why ? { index: '', why } : { index: p, why: '' };
+    }
+    derivedMiss = true;
   } catch { /* silence-ok: not a repo / no git / git timed out — all mean "this derivation does not apply", and step 2's discovery below is the designed next attempt. A failure to resolve ends at the `skip: memory index not resolved` receipt, which main() hlogs. */ }
 
-  // 2. Fall back to discovery: if exactly ONE project has a memory index, it is unambiguous.
+  // 2. Fall back to discovery: if exactly ONE project has a memory index, it is unambiguous — as
+  //    to WHICH index, not as to whether this session may write to it. A folder name is only a
+  //    lossy encoding of a directory (a project reached through a junction or a link is stored
+  //    under the spelling Claude Code was started with, not the real path a list entry carries),
+  //    so it can neither be shown to be outside an exclusion nor inside an allow-list. Discovery
+  //    therefore stays off whenever either list is set.
+  if (lists.dirs.length || lists.included.length) {
+    return {
+      index: '',
+      why: derivedMiss
+        ? 'no memory index exists under the project folder derived from the repository path, and a directory list is set, so another project\'s index is not guessed'
+        : 'a directory list is set, so the memory index is not guessed from the projects folder',
+    };
+  }
   try {
     const found = fs.readdirSync(projectsDir())
-      .map((d) => path.join(projectsDir(), d, 'memory', 'MEMORY.md'))
-      .filter((p) => fs.existsSync(p));
-    if (found.length === 1) return found[0];
-  } catch { /* silence-ok: the projects dir is unreadable or absent — indistinguishable here from "no index found", and BOTH correctly fall to the `return ''` below, whose `skip: memory index not resolved` receipt main() hlogs. The refusal is reported; only its reason is coarse. */ }
+      .filter((d) => fs.existsSync(path.join(projectsDir(), d, 'memory', 'MEMORY.md')));
+    if (found.length === 1) return { index: path.join(projectsDir(), found[0], 'memory', 'MEMORY.md'), why: '' };
+  } catch { /* silence-ok: the projects dir is unreadable or absent — indistinguishable here from "no index found", and BOTH correctly fall to the `return` below, whose `skip: memory index not resolved` receipt main() hlogs. The refusal is reported; only its reason is coarse. */ }
 
-  return ''; // ambiguous or absent -> skip; never guess, never create
+  return { index: '', why: '' }; // ambiguous or absent -> skip; never guess, never create
 }
 
 const BASE = (cred('VECTROS_API_BASE_URL') || 'https://api.vectros.ai').replace(/\/+$/, '');
@@ -161,8 +289,9 @@ function renderBlock(records) {
  * Never throws; never touches anything outside the markers.
  */
 export async function refreshPinnedBlock() {
-  const MEMORY_INDEX = resolveMemoryIndex();
-  if (!MEMORY_INDEX) return 'skip: memory index not resolved (never guess, never create)';
+  const resolved = resolveMemoryIndex();
+  const MEMORY_INDEX = resolved.index;
+  if (!MEMORY_INDEX) return resolved.why ? `skip: ${resolved.why} (file untouched)` : 'skip: memory index not resolved (never guess, never create)';
 
   const records = await fetchPinned();
   if (records === null) return 'skip: lookup failed (file untouched)';

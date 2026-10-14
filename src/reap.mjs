@@ -14,7 +14,7 @@
  *
  * ── THE CORRECTION THAT SHAPES THE WHOLE DESIGN ─────────────────────────────────────────────────
  *
- * The original design said: *"Desktop spawns ~1-2 empty Stops per minute, each of which creates a state file."*
+ * The original assumption was: *"Desktop spawns ~1-2 empty Stops per minute, each of which creates a state file."*
  * That is not what is happening, and believing it produces a reaper that does nothing.
  *
  * MEASURED: 5,450 of the 5,779 files hold EXACTLY `{orientPending, orientSource, orientedAt}` —

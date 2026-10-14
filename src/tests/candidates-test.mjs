@@ -2,7 +2,7 @@
  * The record-backed candidate client — every branch, with a FAKE transport.
  *
  * WHY A FAKE AND NOT THE REAL STORE. The `candidate` type does not exist in the production context
- * yet (the deploy gate in the design), so a test that needed the real store could not run until a
+ * yet (its deploy is gated), so a test that needed the real store could not run until a
  * deploy that is itself gated on this code being correct. More durably: the branches that matter
  * here are the FAILURES — a timeout, a 5xx, a malformed body, a missing schema — and none of those
  * can be produced on demand against a healthy API. A fake is the only way to assert the contract

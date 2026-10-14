@@ -84,8 +84,7 @@ const SECRET_PATTERNS = [
   { name: 'aws-temp-access-key-id', re: /\bASIA[0-9A-Z]{16}\b/g },
   // The AWS *secret* access key — the actual credential, not just the key id — only has a fixed
   // shape when labeled (a bare 40-char base64-ish string is indistinguishable from countless other
-  // things and would flood this scan with false positives). Labeled assignment only, mirroring the
-  // same scoped pattern this monorepo's own public-mirror scrub already uses for the identical risk.
+  // things and would flood this scan with false positives). Labeled assignment only.
   { name: 'aws-secret-access-key', re: /\baws_secret_access_key\s*[=:]\s*[0-9A-Za-z/+]{40}\b/gi },
   { name: 'github-token', re: /\bgh[pousr]_[A-Za-z0-9]{36,255}\b/g },
   { name: 'github-fine-grained-token', re: /\bgithub_pat_[A-Za-z0-9_]{30,}\b/g },
@@ -102,8 +101,7 @@ const SECRET_PATTERNS = [
   { name: 'jwt', re: /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?![A-Za-z0-9_-])/g },
   // This package's OWN partner-API key formats (`sk_live_`/`sk_test_`/`ssk_live_`/`ssk_test_`) —
   // the single most likely secret to appear in one of this package's own transcripts, since it's
-  // exactly the credential this tool itself uses (VECTROS_API_KEY). Same pattern already vetted
-  // and shipped in this monorepo's own public-mirror scrub for the identical risk.
+  // exactly the credential this tool itself uses (VECTROS_API_KEY).
   { name: 'vectros-api-key', re: /(?<![A-Za-z0-9_-])(sk|ssk)_(live|test)_[A-Za-z0-9_-]{28,}(?![A-Za-z0-9_-])/g },
   // scheme://user:pass@host — redact the whole match (scheme+host is convenience, not the risk).
   { name: 'connection-string-credential', re: /\b[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\s:@/]*:[^\s:@/]+@[^\s/]+/g },

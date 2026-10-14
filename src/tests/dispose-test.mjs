@@ -4,11 +4,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { pathToFileURL, fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
-import { check, eq, done } from './assert.mjs';
+import { spawn, spawnSync } from 'node:child_process';
+import { check, eq, done, requireGit } from './assert.mjs';
 import './isolate.mjs';   // MUST precede any runtime-state path use — see the file header.
 import { queueFor, verdictMutationsOffFile } from '../paths.mjs';
 import { startFakeRecordsServer } from './fake-records-server.mjs';
+
+requireGit(); // the "plain git project" cases build real repositories
 
 /**
  * THIS FILE OPTS IN TO VERDICT MUTATIONS, and it is one of the few that may.
@@ -518,6 +520,178 @@ console.log('\n=== 12. documented: CONTAINMENT — bounded to the worktree ROOT,
   check('run from outside any worktree, a sibling path is REFUSED (no root ⇒ no gate ⇒ refuse)',
     r2.status !== 0, `exit=${r2.status} ${((r2.stdout || '') + (r2.stderr || '')).slice(0, 300)}`);
   check('...and the candidate survives', isPending(SID, D));
+}
+
+console.log('\n=== a PLAIN git project (no docs/development/CONVENTIONS.md) is a root too ===');
+{
+  /**
+   * A project outside the one this package was written in has no CONVENTIONS.md. The root used to be
+   * found only by that landmark, so every path citation from such a project was refused with "cannot
+   * locate the worktree root" — in every project that does not keep that file, from the directory the agent
+   * run from. The git top level is the root there. The refusals must survive the change: a citation
+   * outside the project, and a parent directory holding several checkouts, still find no gate to
+   * pass through.
+   */
+  const gitInit = (dir) => spawnSync('git', ['init', '-q', dir], { encoding: 'utf8' });
+  const plainRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dispose-test-plaingit-'));
+  const gi = gitInit(plainRoot);
+  check('fixture: git init worked (the cases below need git on PATH)', gi.status === 0, `${gi.stderr || ''}${gi.error ? gi.error.message : ''}`);
+  fs.mkdirSync(path.join(plainRoot, 'docs'), { recursive: true });
+  fs.mkdirSync(path.join(plainRoot, 'src', 'deep'), { recursive: true });
+  fs.writeFileSync(path.join(plainRoot, 'docs', 'guide.md'), '# Guide\n\n## The anchor\n\nUsed only by dispose-test.mjs.\n');
+  fs.writeFileSync(path.join(plainRoot, 'README.md'), '# Fixture project\n');
+  const otherRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dispose-test-plaingit-other-'));
+  gitInit(otherRoot);
+  fs.writeFileSync(path.join(otherRoot, 'NOTES.md'), '# a different project\n');
+  // A scratch directory under the OS temp dir must not find a repository above it.
+  const CEIL = { ...ENV, GIT_CEILING_DIRECTORIES: os.tmpdir() };
+  const rm = (d) => { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best effort */ } };
+  const runIn = (cwd, args, env = CEIL) => spawnAsync([path.join(DIR, 'dispose.mjs'), SID, ...args], { cwd, timeout: 30000, env });
+  const said = (r) => (r.stdout || '') + (r.stderr || '');
+  try {
+    const A = seedCandidate(SID, { title: 'plain git: documented path' });
+    const rA = await runIn(plainRoot, [`${A}=documented:docs/guide.md#the-anchor`]);
+    check('documented:<path> verifies in a git project with no CONVENTIONS.md', rA.status === 0, `exit=${rA.status} ${said(rA).slice(0, 300)}`);
+    check('...and it settled', !isPending(SID, A));
+
+    const B = seedCandidate(SID, { title: 'plain git: covered path' });
+    const rB = await runIn(plainRoot, [`${B}=ignored:covered:docs/guide.md`]);
+    check('ignored:covered:<path> verifies there too', rB.status === 0, `exit=${rB.status} ${said(rB).slice(0, 300)}`);
+    check('...and it settled', !isPending(SID, B));
+
+    const C = seedCandidate(SID, { title: 'plain git: cwd-relative from a nested directory' });
+    const rC = await runIn(path.join(plainRoot, 'src', 'deep'), [`${C}=documented:../../docs/guide.md`]);
+    check('a cwd-relative path verifies from a subdirectory', rC.status === 0, `exit=${rC.status} ${said(rC).slice(0, 300)}`);
+    const recC = [...server.store.values()].find((r) => r.typeName === 'candidate' && r.payload.title === 'plain git: cwd-relative from a nested directory');
+    check('...and the record carries the path relative to the git top level', recC.payload.resolved === 'docs/guide.md', JSON.stringify(recC.payload.resolved));
+
+    const D = seedCandidate(SID, { title: 'plain git: a different project' });
+    const rD = await runIn(plainRoot, [`${D}=documented:../${path.basename(otherRoot)}/NOTES.md`]);
+    check('a citation into ANOTHER project is still refused', rD.status !== 0, `exit=${rD.status}`);
+    check('...and is diagnosed as outside the worktree', /OUTSIDE this worktree/.test(said(rD)), said(rD).slice(0, 300));
+    check('...and the candidate survives', isPending(SID, D));
+
+    const E = seedCandidate(SID, { title: 'plain git: a file that is not there' });
+    const rE = await runIn(plainRoot, [`${E}=documented:docs/nope.md`]);
+    check('a missing file is still refused', rE.status !== 0 && /does not exist/.test(said(rE)), said(rE).slice(0, 300));
+    check('...and the candidate survives', isPending(SID, E));
+
+    // The parent of several checkouts is not inside any of them: no root, so no gate to pass through.
+    const F = seedCandidate(SID, { title: 'plain git: parent of several checkouts' });
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'dispose-test-parent-'));
+    try {
+      const inner = path.join(parent, 'checkout-a');
+      fs.mkdirSync(inner);
+      gitInit(inner);
+      fs.writeFileSync(path.join(inner, 'README.md'), '# a\n');
+      const rF = await runIn(parent, [`${F}=documented:checkout-a/README.md`]);
+      check('from the parent of several checkouts a sibling path is REFUSED', rF.status !== 0, `exit=${rF.status} ${said(rF).slice(0, 300)}`);
+      check('...and the candidate survives', isPending(SID, F));
+    } finally {
+      try { fs.rmSync(parent, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+
+    // An ENCLOSING repository must not turn a parent of several checkouts into a project: from a directory that
+    // is inside an outer repository but holds its own nested checkouts, a citation into one of them is refused.
+    const outer = fs.mkdtempSync(path.join(os.tmpdir(), 'dispose-test-outer-'));
+    try {
+      gitInit(outer);
+      fs.mkdirSync(path.join(outer, 'projects', 'proj-a', 'docs'), { recursive: true });
+      gitInit(path.join(outer, 'projects', 'proj-a'));
+      fs.writeFileSync(path.join(outer, 'projects', 'proj-a', 'docs', 'x.md'), '# x\n');
+      fs.writeFileSync(path.join(outer, 'projects', 'top.md'), '# top\n');
+      const H1 = seedCandidate(SID, { title: 'plain git: nested checkout under an enclosing repository' });
+      const rH1 = await runIn(path.join(outer, 'projects'), [`${H1}=documented:proj-a/docs/x.md`]);
+      check('a citation into a NESTED checkout is refused when the root is an enclosing repository', rH1.status !== 0, `exit=${rH1.status} ${said(rH1).slice(0, 300)}`);
+      check('...and is diagnosed as a different repository', /different git repository/.test(said(rH1)), said(rH1).slice(0, 300));
+      check('...and the candidate survives', isPending(SID, H1));
+      const H2 = seedCandidate(SID, { title: 'plain git: a file of the enclosing repository itself' });
+      const rH2 = await runIn(path.join(outer, 'projects'), [`${H2}=documented:top.md`]);
+      check('a file of the enclosing repository itself still verifies', rH2.status === 0, `exit=${rH2.status} ${said(rH2).slice(0, 300)}`);
+    } finally { rm(outer); }
+
+    // Inherited GIT_DIR must not redefine the project: with it set and no work tree, git's "top level" is the
+    // working directory itself, which would make a parent of checkouts a project.
+    const G2 = seedCandidate(SID, { title: 'plain git: GIT_DIR in the environment' });
+    const parent2 = fs.mkdtempSync(path.join(os.tmpdir(), 'dispose-test-gitdir-'));
+    try {
+      const inner2 = path.join(parent2, 'checkout-a');
+      fs.mkdirSync(inner2);
+      gitInit(inner2);
+      fs.writeFileSync(path.join(parent2, 'plain.md'), '# a file in the parent, outside every checkout\n');
+      const rG2 = await runIn(parent2, [`${G2}=documented:plain.md`], { ...CEIL, GIT_DIR: path.join(inner2, '.git') });
+      check('GIT_DIR in the environment does not make a parent of checkouts a project', rG2.status !== 0, `exit=${rG2.status} ${said(rG2).slice(0, 300)}`);
+      check('...and the candidate survives', isPending(SID, G2));
+    } finally { rm(parent2); }
+
+    // The runtime directory is not a project, even when a repository above it (a dotfiles repository) makes it a
+    // git working tree: from there, or from beneath it, a path citation is refused.
+    const rtHome = path.join(plainRoot, 'vm');
+    fs.mkdirSync(path.join(rtHome, 'deeper'), { recursive: true });
+    const idA = seedCandidate(SID, { title: 'plain git: run from the runtime directory' });
+    const resA = await runIn(rtHome, [`${idA}=documented:docs/guide.md`], { ...CEIL, VECTROS_MEMORY_HOME: rtHome });
+    check('a path citation from inside the runtime directory is REFUSED even in a git working tree', resA.status !== 0, `exit=${resA.status} ${said(resA).slice(0, 300)}`);
+    check('...and the refusal says to run from the project', /runtime directory/.test(said(resA)), said(resA).slice(0, 300));
+    check('...and the candidate survives', isPending(SID, idA));
+    const idB = seedCandidate(SID, { title: 'plain git: run from beneath the runtime directory' });
+    const resB = await runIn(path.join(rtHome, 'deeper'), [`${idB}=documented:docs/guide.md`], { ...CEIL, VECTROS_MEMORY_HOME: rtHome });
+    check('...and from a directory beneath it', resB.status !== 0, `exit=${resB.status}`);
+    const idC = seedCandidate(SID, { title: 'plain git: the project itself with the same runtime directory configured' });
+    const resC = await runIn(plainRoot, [`${idC}=documented:docs/guide.md`], { ...CEIL, VECTROS_MEMORY_HOME: rtHome });
+    check('the project directory itself still verifies', resC.status === 0, `exit=${resC.status} ${said(resC).slice(0, 300)}`);
+
+    // A link inside the project that leads OUT of it. The target is a plain directory (not a repository), so
+    // only the link check can refuse it, never the nested-repository walk.
+    const L1 = seedCandidate(SID, { title: 'plain git: a link that leaves the project' });
+    const plainOut = fs.mkdtempSync(path.join(os.tmpdir(), 'dispose-test-linktarget-'));
+    fs.writeFileSync(path.join(plainOut, 'NOTES.md'), '# elsewhere\n');
+    let linked = true;
+    try { fs.symlinkSync(plainOut, path.join(plainRoot, 'linked-out'), 'junction'); } catch { linked = false; }
+    if (linked) {
+      const rL1 = await runIn(plainRoot, [`${L1}=documented:linked-out/NOTES.md`]);
+      check('a citation through a link that leads outside the project is REFUSED', rL1.status !== 0, `exit=${rL1.status} ${said(rL1).slice(0, 300)}`);
+      check('...and is diagnosed as resolving through a link', /through a link/.test(said(rL1)), said(rL1).slice(0, 300));
+      check('...and the candidate survives', isPending(SID, L1));
+    } else {
+      console.log('  SKIP  could not create a directory link on this machine');
+    }
+
+    rm(plainOut);
+
+    // The same two checks hold for a landmark root (the project keeps docs/development/CONVENTIONS.md): a
+    // repository nested below it is not part of it, and a separate clone BELOW the landmark directory is its
+    // own project, the deeper root winning.
+    const lmRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dispose-test-landmark-'));
+    try {
+      fs.mkdirSync(path.join(lmRoot, 'docs', 'development'), { recursive: true });
+      fs.writeFileSync(path.join(lmRoot, 'docs', 'development', 'CONVENTIONS.md'), '# c\n');
+      fs.writeFileSync(path.join(lmRoot, 'top.md'), '# top\n');
+      fs.mkdirSync(path.join(lmRoot, 'nested', 'docs'), { recursive: true });
+      gitInit(path.join(lmRoot, 'nested'));
+      fs.writeFileSync(path.join(lmRoot, 'nested', 'docs', 'inner.md'), '# inner\n');
+      const M1 = seedCandidate(SID, { title: 'landmark: a nested repository' });
+      const rM1 = await runIn(lmRoot, [`${M1}=documented:nested/docs/inner.md`]);
+      check('a landmark root also refuses a citation inside a nested repository', rM1.status !== 0 && /different git repository/.test(said(rM1)), `exit=${rM1.status} ${said(rM1).slice(0, 300)}`);
+      const M2 = seedCandidate(SID, { title: 'landmark: a file of the landmark project' });
+      const rM2 = await runIn(lmRoot, [`${M2}=documented:top.md`]);
+      check('...while a file of the landmark project still verifies', rM2.status === 0, `exit=${rM2.status} ${said(rM2).slice(0, 300)}`);
+      const M3 = seedCandidate(SID, { title: 'landmark: a clone below the landmark directory is its own project' });
+      const rM3 = await runIn(path.join(lmRoot, 'nested'), [`${M3}=documented:../top.md`]);
+      check('from a separate clone below the landmark directory the clone is the project (the file above it is refused)', rM3.status !== 0, `exit=${rM3.status} ${said(rM3).slice(0, 300)}`);
+    } finally { rm(lmRoot); }
+
+    // `--list` prints a command that works from a project directory: the full path to this script.
+    const rList = await spawnAsync([path.join(DIR, 'dispose.mjs'), SID, '--list'], { cwd: plainRoot, timeout: 30000, env: CEIL });
+    check('--list prints the full path of dispose.mjs, not a bare name', said(rList).includes(path.join(DIR, 'dispose.mjs')) && !/node dispose\.mjs/.test(said(rList)), said(rList).slice(-400));
+
+    // `§N` is the CONVENTIONS.md shorthand; a git root does not make it available.
+    const G = seedCandidate(SID, { title: 'plain git: section shorthand without the file' });
+    const rG = await runIn(plainRoot, [`${G}=ignored:covered:§65`]);
+    check('§N is still refused where there is no CONVENTIONS.md', rG.status !== 0, `exit=${rG.status} ${said(rG).slice(0, 300)}`);
+    check('...and the candidate survives', isPending(SID, G));
+  } finally {
+    for (const d of [plainRoot, otherRoot]) { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best effort */ } }
+  }
 }
 
 console.log('\n=== `resolved` is recorded on EVERY disposition path, not just `documented` ===');

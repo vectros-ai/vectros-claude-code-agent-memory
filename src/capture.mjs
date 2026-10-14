@@ -16,13 +16,15 @@
  * RE-ENTRANCE GUARD: no-op inside the mid-run evaluator's own nested `claude -p`.
  * Emits nothing; never blocks. Self-contained. Fail-open.
  */
+import { stdinText } from './optout.mjs'; // FIRST: the opt-out guard runs before anything below
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { cred, workersDisabled } from './creds.mjs';
 import { hlog } from './hooklog.mjs';
 import { readState, writeState } from './state.mjs';
-import { read as readQueue } from './queue.mjs';
+import { read as readQueue, markCwd } from './queue.mjs';
+import { originDirs } from './exclusion.mjs';
 import { isHeld, claim, release } from './lock.mjs';
 import { transcriptLength } from './transcript.mjs';
 import { runSweep } from './sweep.mjs';
@@ -52,8 +54,8 @@ const API_KEY = cred('VECTROS_API_KEY');
  *     not model quality. We kept asking the same question and got new answers.
  *   - one run had a 598K-char delta and read 12K of it.
  *
- * DELTA_GATE_CHARS ~100K yields ~7 calls/session, which is what the design always meant by
- * "a few calls per session". It is also what kills the ~1/min phantom Desktop sessions: they
+ * DELTA_GATE_CHARS ~100K yields ~7 calls/session, i.e. "a few calls per session".
+ * It is also what kills the ~1/min phantom Desktop sessions: they
  * produce no text, so no delta, so no call. No lifecycle event needed, no promptCount guard
  * needed — content is the whole discriminator.
  *
@@ -82,23 +84,13 @@ const API_KEY = cred('VECTROS_API_KEY');
 // auto-load), but the pinned set changes rarely, so ~10 min is plenty. One REST lookup + one
 // atomic file write; no inference.
 
-function readStdin() {
-  return new Promise((resolve) => {
-    let data = '';
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (c) => (data += c));
-    process.stdin.on('end', () => resolve(data));
-    process.stdin.on('error', () => resolve(''));
-  });
-}
-
 async function main() {
   let input;
   // An unparseable payload means this hook does NOTHING, in every session, until someone notices —
   // the founding story behind this discipline, exactly (recall.mjs read the wrong field name and no-op'd for a week).
   // recall.mjs logs this; the other four entry points did not. Same shape, receipt only where the
   // bug had already been found — the same census discipline failure mode.
-  try { input = JSON.parse(await readStdin()); } catch { hlog('capture', 'skip: unparseable stdin'); return; }
+  try { input = JSON.parse(stdinText); } catch { hlog('capture', 'skip: unparseable stdin'); return; }
   const sessionId = input.session_id || 'nosession';
   const transcriptPath = input.transcript_path || '';
   const now = Date.now();
@@ -423,6 +415,15 @@ async function main() {
      * projector, which is what both clocks were promised.
      */
     if (claimed) {
+      // Record where this session started, once, at its first capture: the sweep, the orphan cap and
+      // the cross-session nudge read it to honour the opt-out list for a session that is no longer
+      // running, even if the list changed after this capture. → exclusion.mjs.
+      if (q.state !== 'corrupt' && !q.cwd && !q.projectDir) { // 'fresh' (no queue yet) is exactly the first-capture case
+        const origin = originDirs(input);
+        if ((origin.cwd || origin.projectDir) && !markCwd(sessionId, origin.cwd, origin.projectDir)) {
+          hlog('capture', 'could not record the session directory in its queue — a later change to the exclusion list will not reach this session\'s leftover candidates', sessionId);
+        }
+      }
       try {
         const child = spawn(process.execPath, [WORKER, sessionId, transcriptPath, String(q.offset)], {
           // windowsHide is NOT optional here: on Windows `detached: true` gives the child its OWN

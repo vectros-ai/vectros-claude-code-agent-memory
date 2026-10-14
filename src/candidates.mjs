@@ -5,7 +5,7 @@
  * settled it must never be recalled as fact, which is why the `candidate` type is declared
  * `indexMode: NONE` — store-only, never indexed, unreachable by search under any query. That
  * separation is enforced by the platform, not by this file remembering to filter; verified
- * empirically against staging (design § 6.1).
+ * empirically against a live environment.
  *
  * WHAT THIS MODULE IS. The transport and the contract — nothing else. It does not decide when to
  * propose, what is worth storing, or how a nudge reads. Those live in the callers, exactly as they

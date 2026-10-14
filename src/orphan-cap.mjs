@@ -1,7 +1,7 @@
 /**
  * ORPHAN CAP — auto-ignore a genuinely record-backed candidate that has been offered on too many
  * DISTINCT DAYS with nobody settling it. This header states the shape, not the full tradeoff
- * defense for the design (raw event count vs. distinct-session count vs. distinct-day count).
+ * between counting raw events, distinct sessions and distinct days.
  *
  * WHAT THIS IS NOT. A separate, internal-only migration tool (not part of this package) handles a
  * DIFFERENT population — a candidate with ZERO backing record at all, which can never be settled
@@ -40,6 +40,7 @@ import path from 'node:path';
 import { inMemoryHome, orphanCapOffFile, queueDir, slug } from './paths.mjs';
 import { read as readQueue } from './queue.mjs';
 import { isReal } from './residual.mjs';
+import { excludedSessionCheck } from './exclusion.mjs';
 import { ORPHAN_CAP_DAYS, ORPHAN_CAP_DEBOUNCE_MS, ORPHAN_CAP_MAX_PER_RUN } from './config.mjs';
 
 /** Marker file holding the last check time — same pattern as reap.mjs's REAP_MARKER/sweep's
@@ -139,7 +140,7 @@ export function classifyOrphanQueue(q, opts = {}) {
  * all apply to this exact directory), and only files that actually have SOMETHING pending (a settled queue can never
  * breach, so skipping it here is one less file this cheap, inline, per-Stop scan has to fold).
  */
-export function collectOrphanCandidates({ queueD = queueDir() } = {}) {
+export function collectOrphanCandidates({ queueD = queueDir(), isExcluded = excludedSessionCheck() } = {}) {
   const queues = [];
   let files;
   try { files = fs.readdirSync(queueD).filter((f) => f.endsWith('.jsonl')); }
@@ -149,6 +150,9 @@ export function collectOrphanCandidates({ queueD = queueDir() } = {}) {
     if (!isReal(sid)) continue;
     const q = readQueue(sid);
     if (q.state !== 'ok' || !q.pending.length) continue; // unreadable or settled: never a breach
+    // Settling is a records write. A session that originated in an excluded directory must not get one,
+    // whatever the list said when it was captured. → exclusion.mjs.
+    if (isExcluded(sid, { queueDirs: [q.cwd, q.projectDir].filter(Boolean) })) continue;
     queues.push({ sid, pending: q.pending, handedDays: distinctHandedDates(sid, { queueD }) });
   }
   return queues;

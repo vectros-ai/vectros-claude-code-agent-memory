@@ -42,6 +42,7 @@
  * one `readJsonSafe` — so it is deterministic and trivially RED-provable (→ tests/config-test.mjs).
  * Import-time wiring calls it once against the real path/env and emits the receipt through `hlog`.
  */
+import fs from 'node:fs';
 import { readJsonSafe } from './atomic.mjs';
 import { hlog } from './hooklog.mjs';
 import { configFile } from './paths.mjs';
@@ -186,7 +187,7 @@ export const SPEC = {
    * seam's contract is that provenance travels with the default, which means saying "guess" out
    * loud, not quietly counting it among the measured three.
    *
-   * An earlier design note shipped the first three as `n=0 — GUESS` and said so:
+   * The first three originally shipped as `n=0 — GUESS`, and said so:
    * that is WHY a residual-measurement approach landed first. It made residual measurable; these are now set from what it
    * measured, over 13 real sessions carrying a transcript path:
    *
@@ -229,7 +230,7 @@ export const SPEC = {
     env: 'VECTROS_MEM_RESIDUAL_FLOOR_CHARS',
     // Floor 500, not 1: the value of this knob is that it EXCLUDES phantom sessions, and a floor of
     // 1 disables that guard entirely while still type-checking — the same "accepted the one value
-    // the bound exists to exclude" shape as CONTEXT_CAP's old 10_000. The design's own range was
+    // the bound exists to exclude" shape as CONTEXT_CAP's old 10_000. The intended range was
     // "a few hundred–2K", so 500 is its bottom, not a new opinion.
     parse: posInt(500, 1_000_000),
     note: 'n=13 — the smallest tail worth a Haiku call. MEASURED: every session with '
@@ -1080,6 +1081,93 @@ export const CONSTRAINTS = [
 const days = (ms) => Math.round(ms / 86_400_000);
 
 /**
+ * THE OPT-OUT LIST — directories whose sessions are excluded from recall and capture.
+ *
+ * (Both lists — `EXCLUDED_DIRECTORIES` and `INCLUDED_DIRECTORIES` — follow the rules below.)
+ *
+ * NOT IN `SPEC`, deliberately. Every `SPEC` entry is a scalar with a `VECTROS_MEM_<KEY>` env
+ * override that, when set, replaces the file value. That is the wrong shape for an exclusion: an
+ * env override that could silently REPLACE the list would be a way to lose an exclusion, and a
+ * receipt that echoed the values on every hook process would write the excluded paths into
+ * `hooks.log` on every invocation. So the list is file-only, validated here, and never echoed.
+ *
+ * FAIL CLOSED — the one place this module departs from "a hook must never break a turn because
+ * config didn't parse". Every other knob degrades to its default when the file is unusable; for
+ * this one the default is "capture everything", which is exactly the outcome the list exists to
+ * prevent. So an unreadable or malformed config file, or an invalid value for this key, resolves
+ * to a `problem` that makes every hook skip its work (`optout.mjs`) until the file is fixed. The
+ * hook still exits 0 and never blocks the turn; it just does nothing, and says why.
+ */
+export const EXCLUDED_DIRECTORIES_KEY = 'EXCLUDED_DIRECTORIES';
+/**
+ * Its allow-list counterpart. When `INCLUDED_DIRECTORIES` is present and non-empty, ONLY sessions
+ * under one of its entries get recall and capture; everything else is off. Absent or empty means
+ * no restriction, so an existing config behaves exactly as before. An entry of
+ * `EXCLUDED_DIRECTORIES` always wins over an inclusion that covers the same place.
+ */
+export const INCLUDED_DIRECTORIES_KEY = 'INCLUDED_DIRECTORIES';
+
+/**
+ * An entry must be an ABSOLUTE path on the platform it will be matched on. A relative or `~` path
+ * has no fixed meaning to a hook process, and a "rooted but driveless" Windows path (`\work`) is
+ * relative to whichever drive the process happens to be on — all three would match something other
+ * than what the author meant, so they are refused rather than guessed at.
+ */
+const isAbsoluteDir = (s, platform) => (platform === 'win32'
+  // `\\?\` and `\\.\` device paths are refused: they would validate as UNC and then never match the
+  // plain path a session reports, so the entry would look in force and do nothing.
+  ? !/^[\\/]{2}[?.][\\/]/.test(s) && (/^[a-zA-Z]:[\\/]/.test(s) || /^[\\/]{2}[^\\/]+[\\/]+[^\\/]+/.test(s))
+  : s.startsWith('/'));
+
+/**
+ * @returns {{ok: true, dirs: string[]} | {ok: false, why: string}}
+ */
+export function parseExcludedDirectories(raw, platform = process.platform) {
+  if (!Array.isArray(raw)) return { ok: false, why: `must be an array of absolute directory paths (got ${raw === null ? 'null' : typeof raw})` };
+  const dirs = [];
+  for (const [i, entry] of raw.entries()) {
+    if (typeof entry !== 'string' || !entry.trim()) return { ok: false, why: `entry ${i} is not a non-empty string` };
+    const s = entry.trim();
+    if (s.includes('\0')) return { ok: false, why: `entry ${i} contains a NUL byte` };
+    if (!isAbsoluteDir(s, platform)) return { ok: false, why: `entry ${i} is not an absolute path (relative, drive-relative and ~ paths are refused)` };
+    dirs.push(s);
+  }
+  return { ok: true, dirs };
+}
+
+/**
+ * The lists' resolved form: `dirs` (excluded) and `included` (the allow-list, [] = no restriction), or
+ * a `problem` that means "cannot be trusted — fail closed". Either key being invalid is a problem:
+ * a broken allow-list read as "no restriction" would capture exactly what it was meant to fence off.
+ */
+function resolveExcluded({ state, why, fileCfg }) {
+  if (state === 'unreadable' || state === 'damaged') {
+    return { dirs: [], included: [], problem: `config file ${state} (${why}); the directory lists cannot be honoured from it` };
+  }
+  /**
+   * A KEY THAT LOOKS LIKE ONE OF THE LISTS BUT IS NOT, IS A PROBLEM. Every other unrecognised key is
+   * reported and ignored, which for these two would mean a typo (`Excluded_Directories`,
+   * `EXCLUDED_DIRS`, `excludedDirectories`) silently leaves the session unexcluded: the one failure
+   * these lists exist to prevent. Case-sensitive keys are the contract, so a near miss fails closed
+   * and names the key to fix.
+   */
+  for (const k of Object.keys(fileCfg)) {
+    if (k === EXCLUDED_DIRECTORIES_KEY || k === INCLUDED_DIRECTORIES_KEY) continue;
+    if (/^(exclu|inclu)/i.test(k.replace(/[^A-Za-z]/g, ''))) {
+      return { dirs: [], included: [], problem: `unrecognised key "${k}" looks like a directory list, but the keys are case-sensitive: ${EXCLUDED_DIRECTORIES_KEY} / ${INCLUDED_DIRECTORIES_KEY}` };
+    }
+  }
+  const out = { dirs: [], included: [], problem: null };
+  for (const [key, field] of [[EXCLUDED_DIRECTORIES_KEY, 'dirs'], [INCLUDED_DIRECTORIES_KEY, 'included']]) {
+    if (!Object.prototype.hasOwnProperty.call(fileCfg, key)) continue;
+    const p = parseExcludedDirectories(fileCfg[key]);
+    if (!p.ok) return { dirs: [], included: [], problem: `${key} ${p.why}` };
+    out[field] = p.dirs;
+  }
+  return out;
+}
+
+/**
  * Apply the constraints to a resolved value map. MUTATES `values` for `clamp` entries; returns the
  * violations so the caller can report them. Pure apart from that mutation, and exported for tests.
  */
@@ -1107,8 +1195,37 @@ export function applyConstraints(values) {
  * }}
  */
 export function resolveConfig({ file, env }) {
-  const raw = readJsonSafe(file, {});
-  const { state, why } = raw;
+  let raw = readJsonSafe(file, {});
+  /**
+   * WHAT A HAND-EDITED FILE COMMONLY LOOKS LIKE, handled once, here. A UTF-8 byte-order mark (a Windows
+   * Notepad save) is stripped and the file read normally; the other two causes are named so that the
+   * fail-closed message tells the user what to fix instead of "unparseable":
+   *   · UTF-16 (another editor default) cannot be read as UTF-8 — stays damaged, with that cause;
+   *   · an unescaped backslash (`"C:\work"`) is not valid JSON — stays damaged, with that cause.
+   */
+  let hint = '';
+  if (raw.state === 'damaged') {
+    try {
+      const buf = fs.readFileSync(file);
+      if (buf.length >= 2 && ((buf[0] === 0xFF && buf[1] === 0xFE) || (buf[0] === 0xFE && buf[1] === 0xFF))) {
+        hint = 'the file is UTF-16 encoded; save it as UTF-8';
+      } else {
+        const text = buf.toString('utf8');
+        if (text.charCodeAt(0) === 0xFEFF) {
+          try {
+            const parsed = JSON.parse(text.slice(1));
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) raw = { value: { ...parsed }, state: 'ok' };
+          } catch { /* silence-ok: still unparseable after the byte-order mark is removed; the damaged handling below reports it. */ }
+        }
+        // Remove every VALID escape pair first, so a correctly escaped `C:\\work` is not mistaken for a stray backslash.
+        if (raw.state === 'damaged' && /\\/.test(text.replace(/\\(?:[\x22\\/bfnrt]|u[0-9a-fA-F]{4})/g, ''))) {
+          hint = 'it contains an unescaped backslash; write Windows paths as "C:\\\\work\\\\x" or "C:/work/x"';
+        }
+      }
+    } catch { /* silence-ok: the file could not be re-read for a more specific cause; the damaged state from the first read stands. */ }
+  }
+  const { state } = raw;
+  const why = hint && raw.state === 'damaged' ? `${raw.why}; ${hint}` : raw.why;
   /**
    * A NON-OBJECT JSON ROOT IS MALFORMED, NOT CLEAN. `readJsonSafe` returns
    * `{...defaults, ...JSON.parse(raw)}` with no root-type check, so `null`, `42`, `"hello"` and
@@ -1128,7 +1245,8 @@ export function resolveConfig({ file, env }) {
    * between versions, or a stale key from an older config was read by nobody and mentioned by
    * nobody. The operator concludes the value applied and debugs the wrong thing.
    */
-  const unknown = Object.keys(fileCfg).filter((k) => !Object.prototype.hasOwnProperty.call(SPEC, k));
+  const unknown = Object.keys(fileCfg)
+    .filter((k) => k !== EXCLUDED_DIRECTORIES_KEY && k !== INCLUDED_DIRECTORIES_KEY && !Object.prototype.hasOwnProperty.call(SPEC, k));
 
   for (const [key, spec] of Object.entries(SPEC)) {
     // TRUE LAYERING, highest-precedence FIRST: env, then file, then default. A candidate that is
@@ -1163,7 +1281,7 @@ export function resolveConfig({ file, env }) {
   // the resolved set, not of any single candidate. → CONSTRAINTS.
   const violations = applyConstraints(values);
 
-  return { values, state, why, overrides, rejected, unknown, violations };
+  return { values, state, why, overrides, rejected, unknown, violations, excluded: resolveExcluded({ state, why, fileCfg }) };
 }
 
 /**
@@ -1198,6 +1316,10 @@ export function reportConfig(r, file, log = hlog) {
   for (const v of r.violations || []) {
     log('config', `config CONSTRAINT ${v.kind === 'clamp' ? 'CLAMPED' : 'VIOLATED'} (${v.name}) — ${v.why}`);
   }
+  if (r.excluded?.problem) {
+    // Never echoes the list itself — the paths are the sensitive part. Names the problem and the consequence.
+    log('config', `config ${r.excluded.problem} — memory is OFF for EVERY session until this is fixed (an exclusion list that cannot be read cannot be honoured).`);
+  }
   if (r.overrides.length) {
     log('config', `config applied: ${r.overrides.map((o) => `${o.key}=${o.value}(${o.source})`).join(', ')}`);
   }
@@ -1213,6 +1335,10 @@ const DEFAULTS = Object.freeze(Object.fromEntries(Object.entries(SPEC).map(([k, 
 // Declared BEFORE the resolution below, and that ordering is load-bearing — see `tunables()`.
 let RESOLVED = null;
 let RESOLVING = false;
+// A hook asks (before this module is first evaluated) that the receipt wait until it has decided
+// whether the session is excluded. → `emitConfigReceipt`.
+let RECEIPT_PENDING = false;
+const DEFER_RECEIPT = Symbol.for('vectros.memory.deferConfigReceipt');
 
 /**
  * The tunables, resolved once per process. THE RE-ENTRANCY GUARD IS THE WHOLE REASON THIS IS A
@@ -1256,8 +1382,33 @@ export function tunables() {
     RESOLVING = false; // `finally`, so a throw cannot wedge every later call on the defaults
   }
   RESOLVED = r;
-  reportConfig(r, CONFIG_PATH);
+  if (globalThis[DEFER_RECEIPT] === true) RECEIPT_PENDING = true;
+  else reportConfig(r, CONFIG_PATH);
   return r.values;
+}
+
+/**
+ * Write the receipt a deferred resolution owes. A hook (`optout.mjs`) sets the deferral before this
+ * module loads so that an EXCLUDED session writes nothing here: the receipt is a line per hook
+ * process (`config applied: …`), and an excluded session's contract is one line, not one per prompt.
+ * It is emitted once the session is known to run, or when the config itself is the problem. Every
+ * other process (workers, the CLI tools, the tests) never defers and logs at load, as before.
+ */
+export function emitConfigReceipt() {
+  if (!RECEIPT_PENDING || !RESOLVED) return;
+  RECEIPT_PENDING = false;
+  reportConfig(RESOLVED, CONFIG_PATH);
+}
+
+/**
+ * The opt-out lists for THIS process: `{ dirs, included, problem }`. `problem` non-null means the list could
+ * not be trusted and the caller must fail closed. Resolved once, with the tunables, from the same
+ * read of the config file. During the bootstrap re-entrancy window (only `atomic.mjs`/`hooklog.mjs`
+ * can be there, and neither asks) it answers "nothing excluded" rather than recursing.
+ */
+export function optOutConfig() {
+  if (!RESOLVED) tunables();
+  return RESOLVED ? RESOLVED.excluded : { dirs: [], included: [], problem: null };
 }
 
 // ── Import-time wiring: resolve once against the real path/env, log the receipt, export the values.

@@ -17,6 +17,7 @@
  *
  * Config source: VECTROS_API_KEY (+ optional VECTROS_API_BASE_URL) from the hook env.
  */
+import { stdinText } from './optout.mjs'; // FIRST: the opt-out guard runs before anything below
 import fs from 'node:fs';
 import path from 'node:path';
 import { cred } from './creds.mjs';
@@ -44,17 +45,6 @@ const BASE = (cred('VECTROS_API_BASE_URL') || 'https://api.vectros.ai').replace(
 // the 10K additionalContext ceiling). This was the first duplicated const the config seam removed.
 
 function out(obj) { process.stdout.write(JSON.stringify(obj)); }
-
-/** Read stdin fully (async — a sync fd-0 read trips a libuv assert on Windows pipes). */
-function readStdin() {
-  return new Promise((resolve) => {
-    let data = '';
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (c) => (data += c));
-    process.stdin.on('end', () => resolve(data));
-    process.stdin.on('error', () => resolve(''));
-  });
-}
 
 /**
  * THIS is where the state reset came from. The old body was:
@@ -218,7 +208,7 @@ function fuse(lists, topN) {
 }
 
 async function main() {
-  let raw = await readStdin();
+  const raw = stdinText;
   let input;
   try { input = JSON.parse(raw); } catch { hlog('recall', 'skip: unparseable stdin'); return; }
 

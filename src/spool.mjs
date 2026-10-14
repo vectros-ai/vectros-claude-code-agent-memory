@@ -12,7 +12,7 @@
  * the local fold the record move exists to delete, kept alive in six places and drifting from the
  * store in each. So reads go to records, full stop. The cost is precisely this: during an outage a
  * newly proposed candidate is not NUDGED about until sync succeeds. It is durable the whole time.
- * Nothing is lost; a notification is late. That trade is stated plainly in the design and is the
+ * Nothing is lost; a notification is late. That trade is deliberate and is the
  * reason the file stays this small.
  *
  * APPEND-ONLY, folded — the same shape (and the same reasoning) as the queue it replaces. Two
@@ -32,6 +32,7 @@ import fs from 'node:fs';
 import { hlog } from './hooklog.mjs';
 import path from 'node:path';
 import { spoolDir, spoolFor, spoolOffFile, slug } from './paths.mjs';
+import { excludedSessionCheck } from './exclusion.mjs';
 import { SPOOL_MAX_ATTEMPTS, SPOOL_FLUSH_MAX_PER_RUN, SPOOL_DRAIN_MAX_SESSIONS } from './config.mjs';
 import { propose, paused, supersedeByExternalId, CHARGEABLE } from './candidates.mjs';
 
@@ -373,7 +374,7 @@ export async function flush(sessionId, opts = {}) {
  * writes, so the two multiply: the worst case is the product, not either number. No session starves
  * permanently — each one empties and drops out of the list, so a later run reaches the next.
  */
-export async function drainAll(sessionId, { maxSessions = SPOOL_DRAIN_MAX_SESSIONS, ...opts } = {}) {
+export async function drainAll(sessionId, { maxSessions = SPOOL_DRAIN_MAX_SESSIONS, isExcluded = excludedSessionCheck(), ...opts } = {}) {
   // Checked here too, not just in `flush`: otherwise a disabled drain still walks the whole spool
   // directory to produce a receipt per session saying it did nothing.
   const off = spoolDisabled();
@@ -393,6 +394,10 @@ export async function drainAll(sessionId, { maxSessions = SPOOL_DRAIN_MAX_SESSIO
     if (receipts.length >= maxSessions) break;
     if (seen.has(spoolPath(sid))) continue;   // compare PATHS: `sid` here is already slugged
     if (!read(sid).owed.length) continue;
+    // Another session's owed proposals become records here. Not for one that originated in an excluded
+    // directory, even if the list only named it after the proposals were spooled. Checked only for
+    // sessions that actually owe something, since the check can cost two file reads.
+    if (isExcluded(sid)) continue;
     await run(sid);
   }
   return receipts;

@@ -39,6 +39,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { credentialsFile, memoryHome } from '../paths.mjs';
 
+// A developer running Claude Code with the opt-out set (it is meant to be set in a project's settings
+// `env`, which Claude Code also exports to shell commands) would otherwise make every hook this suite
+// spawns exit silently — loud failures in most tests and VACUOUS passes in the "nothing injected" ones.
+// Only the opt-out tests set these, and they set them explicitly on the child.
+delete process.env.VECTROS_MEMORY_OFF;
+delete process.env.CLAUDE_PROJECT_DIR;
+
 /** The isolated root in effect for this process, real or inherited. Exported for receipts. */
 export let ISOLATED_ROOT = memoryHome();
 

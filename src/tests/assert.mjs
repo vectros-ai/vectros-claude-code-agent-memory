@@ -25,6 +25,8 @@
  *     check('a refused claim stays pending', pending.includes('c1'));
  *     done();   // exits 1 if anything failed — CALL IT, or the process exits 0 on failure
  */
+import { spawnSync } from 'node:child_process';
+
 let failures = 0;
 let checks = 0;
 
@@ -65,4 +67,19 @@ export function done() {
     process.exitCode = 1;
   }
   return failures === 0;
+}
+
+/**
+ * For a suite that builds real git repositories: FAIL LOUDLY, with the cause, when git is not on PATH.
+ * Skipping would prove nothing about the code under test, and carrying on crashes on the first
+ * fixture with an error that names nothing ("reading 'trim'"). Call it before the suite makes any
+ * request, so the immediate `process.exit` cannot meet the Windows exit fault `done()` avoids.
+ */
+export function requireGit() {
+  const r = spawnSync('git', ['--version'], { encoding: 'utf8' });
+  if (r.status === 0) return;
+  check('git is on PATH (this suite builds real repositories and proves nothing without it; install git, e.g. `apk add git` on an Alpine image)',
+    false, r.error ? `${r.error.code || r.error.message}` : `exit ${r.status}`);
+  done();
+  process.exit(1);
 }

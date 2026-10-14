@@ -13,7 +13,7 @@
  *   3. If it returns a query, run the deterministic Vectros HYBRID search and stage the
  *      not-yet-served hits to the pickup file evaluate.mjs consumes.
  *
- * DELIBERATE deviation from the design's literal "claude -p runs the search": Haiku emits
+ * DELIBERATE deviation from the obvious approach of letting `claude -p` run the search: Haiku emits
  * only the QUERY; this worker runs the search + staging as deterministic code we control.
  * That is cheaper (no MCP tool schemas loaded, no tool-call turns) and keeps the search/
  * dedup logic identical to prompt-time recall (recall.mjs) — duplicated, not shared, so the two
@@ -34,7 +34,7 @@ import { writeFileAtomic } from './atomic.mjs';
 import { readState } from './state.mjs';
 import { hlog } from './hooklog.mjs';
 import { stagedDir, slug } from './paths.mjs';
-import { fence } from './transcript.mjs'; // neutralize forged prompt delimiters in untrusted text
+import { fence, recentMessages, evaluatorMessageText } from './transcript.mjs'; // fence: neutralize forged prompt delimiters in untrusted text
 import { clampQuery, EVAL_CONTRADICTION_MAX_CHARS, EVAL_CLAUDE_TIMEOUT_MS,
   EVAL_TRANSCRIPT_TAIL_CHARS, EVAL_TRANSCRIPT_TAIL_MSGS, EVAL_TOP_K,
   EVAL_SEARCH_TIMEOUT_MS } from './config.mjs';
@@ -63,42 +63,26 @@ const CLAUDE_BIN =
 
 
 
-/** Extract the recent user+assistant text tail from a Claude Code JSONL transcript. */
+/**
+ * Extract the recent user+assistant text tail from a Claude Code JSONL transcript.
+ *
+ * Reads from the END of the file until `EVAL_TRANSCRIPT_TAIL_MSGS` messages have been found, so the
+ * cost does not grow with the session. It used to read the whole file into one string, which stops
+ * working at about 512 MiB (V8's maximum string length): the worker then evaluated "as if the session
+ * were empty" for exactly the longest sessions, which is where mid-run recall matters most.
+ */
 function readTranscriptTail(p) {
-  let raw;
-  try { raw = fs.readFileSync(p, 'utf8'); }
-  catch (e) {
+  let msgs;
+  try {
+    msgs = recentMessages(p, EVAL_TRANSCRIPT_TAIL_MSGS, evaluatorMessageText);
+  } catch (e) {
     // '' means "no recall opportunity" downstream — identical to a session with nothing to ask
     // about. ENOENT is genuinely that (a session before its first flush) and stays quiet; a real
     // read error is this worker going blind while reporting perfect health.
-    if (e.code !== 'ENOENT') hlog('recall-eval', `transcript READ FAILED (${e.code}) — evaluating as if the session were empty`);
+    if (e.code !== 'ENOENT') hlog('recall-eval', `transcript READ FAILED (${e.code || e.name}) — evaluating as if the session were empty`);
     return '';
   }
-  const lines = raw.split('\n').filter(Boolean);
-  const msgs = [];
-  for (const line of lines) {
-    let e;
-    try { e = JSON.parse(line); } catch { /* silence-ok: append-only transcript read mid-write; a trailing partial line is expected. Costs the newest message for one tick. */ continue; }
-    const role = e?.message?.role || e?.type;
-    if (role !== 'user' && role !== 'assistant') continue;
-    const content = e?.message?.content;
-    let text = '';
-    if (typeof content === 'string') text = content;
-    else if (Array.isArray(content)) {
-      text = content
-        .map((b) => {
-          if (typeof b === 'string') return b;
-          if (b?.type === 'text') return b.text || '';
-          if (b?.type === 'tool_use') return `[tool:${b.name || '?'}]`;
-          return '';
-        })
-        .filter(Boolean)
-        .join(' ');
-    }
-    text = text.replace(/\s+/g, ' ').trim();
-    if (text) msgs.push(`${role === 'user' ? 'USER' : 'ASSISTANT'}: ${text}`);
-  }
-  const tail = msgs.slice(-EVAL_TRANSCRIPT_TAIL_MSGS).join('\n');
+  const tail = msgs.join('\n');
   return tail.length > EVAL_TRANSCRIPT_TAIL_CHARS ? tail.slice(-EVAL_TRANSCRIPT_TAIL_CHARS) : tail;
 }
 

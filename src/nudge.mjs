@@ -40,8 +40,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
  * PROVISIONAL — n=3. The first three real queues under the content gate held 8, 5, and 8 pending
  * after one distiller run each. 5 makes a reviewable batch of roughly one session's learning
  * without interrupting for a single stray thought. This is a guess with a sample behind it, not a
- * tuned value: revisit once queues exist across many sessions. → the handoff's "thresholds are
- * deliberately unset".
+ * tuned value: revisit once queues exist across many sessions.
  */
 
 

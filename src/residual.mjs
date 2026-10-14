@@ -157,7 +157,7 @@ export function residualBySession(nowMs, deps = {}) {
    * stays because the Stop path still benefits and the cost is real:
    *
    * Measured, before this gate existed: one call took **1818 ms** and returned zero rows.
-   * `transcriptLength` is a full `readFileSync` + `split('\n')` + `JSON.parse` per line, and this
+   * `transcriptLength` is a full read of the file (in chunks) + `JSON.parse` per line, and this
    * loop ran it for EVERY session carrying a transcript path — 18 sessions, **218 MB** of JSONL —
    * on every `UserPromptSubmit`, to answer a question that then discarded the number. The staleness
    * filter was applied by the CALLER, after the expensive part. (An earlier "measured" figure of
@@ -328,13 +328,24 @@ export function residualBySession(nowMs, deps = {}) {
     folded++;
     const q = readQ(sid);
     if (q.state === 'corrupt') { noteSkip(`queue ${sid} (residual — offset unknown, refused)`, { code: 'corrupt' }); continue; }
+    /**
+     * THE OPT-OUT, BEFORE THE TRANSCRIPT IS TOUCHED. A session whose recorded origin is in an excluded
+     * directory is not enumerated for the sweep, whatever the list said when it ran: the sweep spawns a
+     * distiller over the transcript, which is exactly what an exclusion forbids. Opt-in via `deps`
+     * because `report.mjs` wants every session's residual, excluded or not, to describe the store as it
+     * is. Counted, so the sweep's receipt can say it dropped them rather than look like it found none.
+     */
+    if (deps.isExcluded && deps.isExcluded(sid, { queueDirs: [q.cwd, q.projectDir].filter(Boolean), stateDirs: [s.cwd, s.projectDir].filter(Boolean), transcriptPath: s.transcriptPath })) {
+      if (deps.stats) deps.stats.excluded = (deps.stats.excluded || 0) + 1;
+      continue;
+    }
     const offset = q.offset || 0;
     /**
      * THE SECOND COST GATE, and it is the one that actually mattered.
      *
      * `minAgeMs` removes LIVE sessions — which were never the expensive population. The expensive
      * population is stale sessions with a big transcript, and every one of them was fully parsed
-     * (`readFileSync` + per-line `JSON.parse`) so that `selectFlushable` could then discard it a
+     * (a full read + per-line `JSON.parse`) so that `selectFlushable` could then discard it a
      * moment later for having been swept already. MEASURED on a Windows 11 dev machine, after the "fix" that
      * only added `minAgeMs`: **1695 ms and 155 MB per due sweep**, on the Stop hook, forever — the
      * cost does not fall away once the backlog drains, because an already-swept session stays

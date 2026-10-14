@@ -26,7 +26,9 @@ before you see the prompt. You do not have to ask for this — it already ran.
 - **Check for staleness before trusting a hit at face value** — if the record or doc a hit points
   at carries some kind of status/superseded marker, a superseded item can still rank highly by
   similarity; don't treat "it matched" as "it's still true."
-- **If nothing was injected, that is not the same as "nothing relevant exists."** Recall is a
+- **If nothing was injected, that is not the same as "nothing relevant exists" — except in an
+  excluded project (see the last section), where nothing is injected on purpose and you must not go
+  looking.** Recall is a
   best-effort search over a rolling window of the conversation, not an exhaustive one. If you're
   about to make a nontrivial decision and nothing surfaced, consider querying the store yourself
   before assuming there's nothing to find — silence from an automatic pass is a weaker signal
@@ -88,3 +90,26 @@ you've trusted with the tool access — has looked at it and said yes. Don't try
 that by disposing everything as `stored` reflexively to "clear the queue" — an unreviewed queue is
 honest about what it is; a queue full of low-value stored records is not, and it's much harder to
 notice and fix later.
+
+<!--
+  The section below is for a project you have excluded with `EXCLUDED_DIRECTORIES` (or by leaving it
+  out of `INCLUDED_DIRECTORIES`, or with `VECTROS_MEMORY_OFF`). Put it in THAT project's own
+  CLAUDE.md, or in a user-level CLAUDE.md scoped to it, rather than in the general section above:
+  an agent in an excluded project should read it, and an agent elsewhere should not be told to ignore
+  its recall.
+-->
+
+## This project is excluded from agent memory
+
+Recall and capture are switched off for this directory: the agent-memory hooks skip every session
+here. That has two consequences for you, and both are instructions, because the hooks cannot stop an
+agent that has been given knowledge-base tools from using them.
+
+- **Nothing was recalled into this session, and that is intentional.** Do not read the silence as a
+  gap to fill. Do not search or query the Vectros knowledge base for this project's work, by any route:
+  search, record or document lookups, or the MCP tools.
+- **Do not store anything from this session in the knowledge base.** No records, documents, memory
+  notes, candidates or `dispose.mjs` dispositions, whether directly or through MCP tools, and do not
+  paste or summarize this project's content into one. If you think something is worth remembering, tell
+  the user and let them decide where it goes. Keep this project's content out of anything else that is
+  shared across sessions too, such as user-level notes.

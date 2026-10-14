@@ -42,6 +42,7 @@
  * Fail-open: any error means the boundary is unmarked, and recall.mjs's pre-flag fallback still
  * orients on a session whose promptCount is 0. Self-contained.
  */
+import { stdinText } from './optout.mjs'; // FIRST: the opt-out guard runs before anything below
 import fs from 'node:fs';
 import { hlog } from './hooklog.mjs';
 import { readState, writeState } from './state.mjs';
@@ -50,19 +51,9 @@ import { stateDir } from './paths.mjs';
 if (process.env.VECTROS_RECALL_EVAL === '1') process.exit(0); // re-entrance guard
 
 
-function readStdin() {
-  return new Promise((resolve) => {
-    let data = '';
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (c) => (data += c));
-    process.stdin.on('end', () => resolve(data));
-    process.stdin.on('error', () => resolve(''));
-  });
-}
-
 async function main() {
   let input;
-  try { input = JSON.parse(await readStdin()); } catch { hlog('orient', 'skip: unparseable stdin'); return; }
+  try { input = JSON.parse(stdinText); } catch { hlog('orient', 'skip: unparseable stdin'); return; }
   const sessionId = input.session_id || 'nosession';
   const source = input.source || 'startup'; // startup | resume | clear
 

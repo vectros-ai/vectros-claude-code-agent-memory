@@ -28,6 +28,7 @@
  *
  * Config source: VECTROS_API_KEY (+ optional VECTROS_API_BASE_URL) from the hook env.
  */
+import { stdinText } from './optout.mjs'; // FIRST: the opt-out guard runs before anything below
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -78,17 +79,6 @@ const API_KEY = cred('VECTROS_API_KEY');
 // config seam removed.
 
 function out(obj) { process.stdout.write(JSON.stringify(obj)); }
-
-/** Read stdin fully (async — a sync fd-0 read trips a libuv assert on Windows pipes). */
-function readStdin() {
-  return new Promise((resolve) => {
-    let data = '';
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (c) => (data += c));
-    process.stdin.on('end', () => resolve(data));
-    process.stdin.on('error', () => resolve(''));
-  });
-}
 
 function stagedPath(sessionId) { return path.join(stagedDir(), slug(sessionId) + '.json'); }
 
@@ -170,7 +160,7 @@ function takeStaged(sessionId) {
 
 async function main() {
   let input;
-  try { input = JSON.parse(await readStdin()); } catch { hlog('evaluate', 'skip: unparseable stdin'); return; }
+  try { input = JSON.parse(stdinText); } catch { hlog('evaluate', 'skip: unparseable stdin'); return; }
   const sessionId = input.session_id || 'nosession';
   const transcriptPath = input.transcript_path || '';
   // silence-ok: no credential → nothing to recall against. this discipline's first half (existence — ran vs. never fired) is satisfied ELSEWHERE

@@ -16,7 +16,7 @@
  * candidates in an earlier version of this gate (see candidates.mjs's CHARGEABLE comment).
  */
 import './isolate.mjs';   // MUST precede any runtime-state path use — see the file header.
-import { check, eq, done } from './assert.mjs';
+import { check, done } from './assert.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

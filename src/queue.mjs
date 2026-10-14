@@ -47,6 +47,13 @@
  *                                                 session's candidates reaching N agents at once;
  *                                                 it EXPIRES (see `handedAt`) so a session that
  *                                                 never settles them cannot strand them forever.
+ *   { op:'cwd',      at, cwd, projectDir }      — where this session was running (the hook payload's
+ *                                                 working directory, and the directory Claude Code was
+ *                                                 started in), recorded once at its first capture. Metadata, not a candidate: it
+ *                                                 lets the sweep, the orphan cap and the cross-session
+ *                                                 nudge honour the opt-out list for a session that is
+ *                                                 no longer running, even if the list changed after
+ *                                                 the capture. The FIRST one wins. → exclusion.mjs.
  *   { op:'swept',    at, residual }             — the stale-queue sweep flushed this
  *                                                 session's tail. NOT a watermark (the worker still
  *                                                 writes its own `captured`) and NOT a disposition;
@@ -100,6 +107,10 @@ export function append(sessionId, ev) {
  *             orphan nudge's cross-session claim. → sweep.mjs `orphanedPending`.
  *   sweptAt — ms epoch of the LAST `swept` event, or null. The stale-queue sweep's "somebody
  *             already flushed this session's tail" marker. Null is the normal case for every live session.
+ *   cwd / projectDir — the directories recorded by the FIRST `cwd` event, or null (a queue from
+ *             before the event existed, or one never captured from). BOTH are kept, because either can
+ *             be the one a later exclusion names (a project directory that is a PARENT of the excluded
+ *             directory, or a working directory inside it).
  *   disposed / superseded — the two Sets `pending` is filtered by, exposed because `--reopen` must
  *             tell them apart (it may undo the first and must refuse the second). Present on EVERY
  *             return, including `fresh` and `corrupt`, so the shape never depends on the branch.
@@ -128,7 +139,7 @@ export function read(sessionId) {
     // The SAME SHAPE on every path — `disposed`/`superseded` included. A return whose fields depend
     // on which branch produced it makes every consumer guard (`q.disposed?.has`), and one that
     // forgets is a silent wrong answer. Same rule the sweep's `blocked` field was fixed for.
-    const empty = (state) => ({ offset: 0, pending: [], all: new Map(), events: 0, sweptAt: null, handedAt: null, handedTo: null, disposed: new Set(), superseded: new Set(), dispositions: new Map(), state });
+    const empty = (state) => ({ offset: 0, pending: [], all: new Map(), events: 0, sweptAt: null, handedAt: null, handedTo: null, cwd: null, projectDir: null, disposed: new Set(), superseded: new Set(), dispositions: new Map(), state });
     if (e.code === 'ENOENT') return empty('fresh');
     hlog('queue', `READ FAILED (${e.code}) — refusing to report an offset; capture will skip this tick`, sessionId);
     return empty('corrupt');
@@ -138,6 +149,8 @@ export function read(sessionId) {
   let sweptAt = null;
   let handedAt = null;
   let handedTo = null;
+  let cwd = null;
+  let projectDir = null;
   /**
    * DISPOSED and SUPERSEDED were ONE `gone` set. They are different facts, and conflating them made
    * `reopen` unimplementable: undoing a dispose is right (a wrong `ignored` destroyed a true
@@ -219,6 +232,11 @@ export function read(sessionId) {
       // must reflect the CURRENT holder rather than the first one.
       const t = Date.parse(e.at);
       if (Number.isFinite(t)) { handedAt = t; handedTo = e.toSid ?? null; }
+    } else if (e.op === 'cwd') {
+      // FIRST WINS. The point of the field is where the session ORIGINATED, so a later event (a
+      // second hook run that saw a different directory) must not move it.
+      if (cwd === null && typeof e.cwd === 'string' && e.cwd) cwd = e.cwd;
+      if (projectDir === null && typeof e.projectDir === 'string' && e.projectDir) projectDir = e.projectDir;
     } else if (e.op === 'swept') {
       /**
        * MONOTONIC, like the watermark above, and for the same reason: an out-of-order or
@@ -236,7 +254,16 @@ export function read(sessionId) {
     }
   }
   const pending = [...all.values()].filter((c) => !disposed.has(c.id) && !superseded.has(c.id));
-  return { offset, pending, all, events, sweptAt, handedAt, handedTo, disposed, superseded, dispositions, state: 'ok' };
+  return { offset, pending, all, events, sweptAt, handedAt, handedTo, cwd, projectDir, disposed, superseded, dispositions, state: 'ok' };
+}
+
+/**
+ * Record the directory this session started in. Idempotent by intent, not by lock: the caller
+ * appends only when the fold's `cwd` is null, and a rare duplicate is harmless because the fold
+ * keeps the first. → exclusion.mjs.
+ */
+export function markCwd(sessionId, cwd, projectDir = '') {
+  return append(sessionId, { op: 'cwd', cwd, projectDir });
 }
 
 /**

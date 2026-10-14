@@ -54,11 +54,12 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { cred } from './creds.mjs';
 import { hlog } from './hooklog.mjs';
 import { read as readQueue, append, DISPOSITIONS } from './queue.mjs';
 import { bySession, settle as settleRecord, reopen as reopenRecord } from './candidates.mjs';
-import { queueDir, slug, SID_DISPLAY_LEN } from './paths.mjs';
+import { queueDir, slug, SID_DISPLAY_LEN, memoryHome } from './paths.mjs';
 import { DISPOSE_TIMEOUT_MS, DISPOSE_STORED_RECENCY_MIN, NUDGE_TITLE_MAX_CHARS, NUDGE_FIELD_MAX_CHARS, QUEUE_BODY_MAX_CHARS } from './config.mjs';
 
 /**
@@ -355,25 +356,12 @@ async function coveredExists(ref) {
 }
 
 /**
- * The REPO ROOT, found by walking up for a landmark file — or null when there isn't one. The
- * landmark is `docs/development/CONVENTIONS.md`, matching the `§N` shorthand's own convention
- * (see `sectionExists` below); a repo without that file simply has no `§N` shorthand available,
- * and callers fall back to the general path-citation form.
- *
- * HOISTED OUT OF `sectionExists`, because `docExists` needed exactly this and used `process.cwd()`
- * instead. That is not the same thing, and the difference was a blocker in both directions:
- *
- *   · FALSE REFUSAL. From a subdirectory a few levels into the repo, a `documented:../../TOP-
- *     LEVEL.md` citation — plainly inside the same repo — was refused, with a diagnosis telling
- *     the agent it was pointing outside the repo. That citation worked before, and a confidently
- *     wrong diagnosis is the exact failure `sectionExists` was rewritten to avoid twenty lines below.
- *   · FALSE ACCEPTANCE. From a directory that happens to be the parent of SEVERAL sibling repo
- *     checkouts, a citation into one sibling's docs passed — the cross-checkout case the comment
- *     claimed to refuse.
- *
- * Both reproduce; neither is exotic. One definition now serves both verifiers.
+ * The directory that carries the `docs/development/CONVENTIONS.md` landmark, found by walking up
+ * from the working directory — or null. The landmark is the `§N` shorthand's own convention (see
+ * `sectionExists` below): a project without that file simply has no `§N` shorthand, and callers
+ * use the general path-citation form instead.
  */
-function repoRoot() {
+function conventionsRoot() {
   let dir = process.cwd();
   for (let i = 0; i < 8; i++) {
     if (fs.existsSync(path.join(dir, 'docs', 'development', 'CONVENTIONS.md'))) return dir;
@@ -385,6 +373,78 @@ function repoRoot() {
 }
 
 /**
+ * The top level of the git working tree the process is inside — or null when it is not inside
+ * one (or git is missing or too slow). A linked worktree answers with its OWN top level, which is
+ * what a citation should be bounded by.
+ */
+function gitTopLevel() {
+  // GIT_DIR and friends would make git answer for a repository other than the one the working
+  // directory is in (with GIT_DIR set and no work tree, the "top level" is the working directory
+  // itself, which is the parent-of-checkouts case this lookup exists to refuse).
+  const env = { ...process.env };
+  for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_NAMESPACE']) delete env[k];
+  try {
+    const out = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: process.cwd(), env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, windowsHide: true,
+    }).trim();
+    return out ? path.resolve(out) : null;
+  } catch { /* silence-ok: not a repo, no git, or git timed out — all mean "no root from git", and
+      the caller's refusal (naming the working directory) is the receipt. */ return null; }
+}
+
+/**
+ * The PROJECT ROOT a `documented:`/`covered:` path is bounded by — or null when there is none.
+ * Two ways to find it, in this order:
+ *
+ *   1. A directory up to eight levels above the working directory that carries
+ *      `docs/development/CONVENTIONS.md` (a project that keeps the numbered-section convention).
+ *   2. The git top level, for every other project. Most projects have no such file, and for them
+ *      step 1 alone refused every path citation, whatever the working directory.
+ *
+ * The working directory has to be inside the project: from the runtime directory, or any directory
+ * beneath it (not a project, even when a dotfiles repository above it makes it a git working
+ * tree), a path citation is refused, and the refusal says to run from the project.
+ *
+ * HOISTED OUT OF `sectionExists`, because `docExists` needed exactly this and used `process.cwd()`
+ * instead. That is not the same thing, and the difference was a blocker in both directions:
+ *
+ *   · FALSE REFUSAL. From a subdirectory a few levels into the repo, a `documented:../../TOP-
+ *     LEVEL.md` citation — plainly inside the same repo — was refused, with a diagnosis telling
+ *     the agent it was pointing outside the repo. That citation worked before, and a confidently
+ *     wrong diagnosis is the exact failure `sectionExists` was rewritten to avoid below.
+ *   · FALSE ACCEPTANCE. From a directory that happens to be the parent of SEVERAL sibling repo
+ *     checkouts, a citation into one sibling's docs passed — the cross-checkout case the comment
+ *     claimed to refuse.
+ *
+ * Neither step falls back to the working directory itself: a parent of several checkouts that is
+ * neither carrying the landmark nor inside a git tree finds no root and every citation is refused.
+ * A parent that IS inside an enclosing git tree gets that outer tree as its root, and `docExists`
+ * then refuses any citation that lies inside a repository nested below it.
+ */
+function repoRoot() {
+  const landmark = conventionsRoot();
+  const git = gitTopLevel();
+  // A git working tree nested BELOW the landmark directory (a separate clone inside a checkout that keeps
+  // the landmark) is its own project: the deeper of the two roots wins.
+  if (landmark && git) {
+    const rel = path.relative(realOr(landmark), realOr(git));
+    if (rel !== '' && !isOutsideRel(rel)) return { dir: git, kind: 'git' };
+  }
+  if (landmark) return { dir: landmark, kind: 'landmark' };
+  return git ? { dir: git, kind: 'git' } : null;
+}
+
+/** True when a `path.relative` result leaves its base (or is on another drive). */
+function isOutsideRel(rel) {
+  return rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel);
+}
+
+/** The on-disk spelling of `p`, or `p` itself when it cannot be resolved. */
+function realOr(p) {
+  try { return fs.realpathSync.native(p); } catch { /* silence-ok: an unresolvable path keeps the spelling it was given, and the containment check that follows is the receipt. */ return p; }
+}
+
+/**
  * Resolve `§N` against a repo-level CONVENTIONS.md, IF one exists at `docs/development/
  * CONVENTIONS.md` with numbered `### N. Title` section headings — an opt-in convention some
  * repos keep, not a requirement this package imposes. Walks UP from cwd to find the repo, so the
@@ -393,7 +453,7 @@ function repoRoot() {
  * "checked".
  */
 function sectionExists(n) {
-  const root = repoRoot();
+  const root = conventionsRoot();
   {
     const p = root && path.join(root, 'docs', 'development', 'CONVENTIONS.md');
     if (p) {
@@ -461,21 +521,32 @@ function docExists(ref) {
    * which they did before any of this. Both candidates are containment-checked — the fallback
    * widens which SPELLINGS are understood, never which files are reachable.
    *
-   * WHAT IT DOES NOT DO, stated so the comment stops outrunning the code: no `realpathSync`, so a
-   * symlink out of the tree is neither resolved nor caught. Acceptable — agent-supplied, locally
-   * executed, read-only, existence-only — but this is hygiene against the realistic error, not a
-   * containment guarantee.
+   * WHAT IT DOES NOT DO, stated so the comment stops outrunning the code: the containment check on the
+   * two spellings of the CITED path above is lexical; the link and nested-repository checks that follow
+   * the choice of file resolve it by real path. Still agent-supplied, locally executed, read-only and
+   * existence-only: hygiene against the realistic error, not a containment guarantee.
    */
-  const root = repoRoot();
-  if (!root) {
-    return { ok: false, why: `cannot locate the worktree root from ${process.cwd()} (no docs/development/CONVENTIONS.md within 8 levels up) — a documented: path is resolved against the repo, so run dispose from inside the worktree` };
+  const runtime = realOr(memoryHome());
+  const runtimeRel = path.relative(runtime, realOr(process.cwd()));
+  if (runtimeRel === '' || !isOutsideRel(runtimeRel)) {
+    return { ok: false, why: `the working directory is inside this package's runtime directory (${runtime}), which is not a project — a documented: path is resolved against your project, so run dispose.mjs from inside it (its full path works from any directory)` };
   }
-  const inside = (q) => {
-    const rr = path.relative(root, q);
-    return !(rr.startsWith('..') || path.isAbsolute(rr));
-  };
+  const found = repoRoot();
+  if (!found) {
+    return { ok: false, why: `cannot locate the project root from ${process.cwd()} (not inside a git working tree or git could not be run, and no docs/development/CONVENTIONS.md within 8 levels up) — a documented: path is resolved against your project, so run dispose.mjs from inside it (its full path works from any directory)` };
+  }
+  /**
+   * A git root is compared by REAL path on both sides. Git reports its own spelling of the top level
+   * (a long name where the working directory carries an 8.3 short one, a target where it carries a
+   * junction), and a containment check between two spellings of one directory refuses the citation
+   * with a confidently wrong "sibling worktree" diagnosis. The landmark root is compared the same way,
+   * so the nested-repository and link checks below see one spelling of the project for either kind.
+   */
+  const root = realOr(found.dir);
+  const cwd = realOr(process.cwd());
+  const inside = (q) => !isOutsideRel(path.relative(root, q));
   const fromRoot = path.resolve(root, rel);
-  const fromCwd = path.resolve(process.cwd(), rel);
+  const fromCwd = path.resolve(cwd, rel);
   const bases = fromRoot === fromCwd ? [fromRoot] : [fromRoot, fromCwd];
     // A DIRECTORY IS NOT A CITATION. `existsSync` alone accepted `documented:.` and
     // `documented:docs/development` — settling a candidate, permanently, against something that
@@ -536,6 +607,26 @@ function docExists(ref) {
   // rationale ("a blank citation in a permanent record") was also false — in that case `resolved`
   // is null and nothing blank ever reached the record. Codifying a degenerate input to make it
   // render is the wrong direction; refuse it instead.
+  /**
+   * A GIT root is only the project when no other repository sits between the cited file and it. With
+   * an enclosing repository (a dotfiles repository at the home directory, a checkout that holds
+   * nested clones, submodules or linked worktrees under it) the top level is the OUTER tree, and a
+   * citation into a sibling or nested checkout would otherwise be accepted from a directory that is
+   * merely inside the outer one: the cross-checkout acceptance the rest of this function refuses.
+   */
+  {
+    // The cited file is followed through links first: a link inside the tree that leads into another
+    // checkout is that checkout's file, not this project's.
+    const real = realOr(p);
+    if (!inside(real)) {
+      return { ok: false, why: `${rel} resolves through a link to ${real}, which is outside the project root ${root} — cite a file that lives in the project` };
+    }
+    for (let d = path.dirname(real); path.relative(root, d) !== '' && inside(d); d = path.dirname(d)) {
+      if (fs.existsSync(path.join(d, '.git'))) {
+        return { ok: false, why: `${rel} lies inside a different git repository (${d}) than the project root ${root} — a nested checkout or submodule is not part of this project; cite a file in the project itself` };
+      }
+    }
+  }
   const noted = path.relative(root, p).split(path.sep).join('/');
   if (!anchor) return { ok: true, note: noted };
   // Lenient on the anchor: heading->slug rules vary and a near-miss should not block a real edit.
@@ -603,10 +694,11 @@ function renderList(rq, sessionId) {
     if (c.revises) console.log(`    (revises ${field(c.revises, NUDGE_FIELD_MAX_CHARS)})`);
     console.log('');
   }
-  console.log('Dispose:  node dispose.mjs ' + sessionId + ' c1=stored:<uuid> c2=documented:<path#anchor> c3=ignored:covered:<path|§N|uuid>');
+  const self = `node "${process.argv[1]}"`;
+  console.log('Dispose:  ' + self + ' ' + sessionId + ' c1=stored:<uuid> c2=documented:<path#anchor> c3=ignored:covered:<path|§N|uuid>');
   console.log('  `ignored:covered:<ref>` is CHECKED — the citation must resolve. Bare `ignored:<reason>` is NOT');
   console.log('  checked; use it only when there is genuinely nothing to cite (not durable, point-in-time).');
-  console.log('Undo:     node dispose.mjs ' + sessionId + ' --reopen <cN> [why]   # a wrong `ignored` is recoverable');
+  console.log('Undo:     ' + self + ' ' + sessionId + ' --reopen <cN> [why]   # a wrong `ignored` is recoverable');
 }
 
 async function main() {

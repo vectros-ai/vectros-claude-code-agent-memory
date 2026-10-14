@@ -59,6 +59,9 @@ const NOT_A_TUNABLE = {
   // check that every call site actually imports and uses this constant rather than re-hardcoding
   // the number — this allowlist entry says only "not tunable", not "unchecked".
   SID_DISPLAY_LEN: 'a shared display-truncation length, not independently tunable — see sid-display-len-test.mjs',
+  // transcript.mjs — an I/O buffer size. It changes speed and peak memory, never a result (tests inject tiny
+  // sizes to prove exactly that), so there is nothing for an adopter to tune and no failure for a knob to cause.
+  CHUNK_BYTES: 'a file-read buffer size: affects speed and memory only, never results — see transcript-stream-test.mjs',
 };
 const DECL = /^(?:export )?const ([A-Z][A-Z0-9_]*) = (-?[0-9][0-9_]*(?:\.[0-9]+)?(?:\s*[*+]\s*[0-9][0-9_]*)*)\s*;/gm;
 const left = [];
