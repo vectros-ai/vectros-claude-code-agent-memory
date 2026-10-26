@@ -183,9 +183,9 @@ spool(SID, 'e2', cand(2));
   /**
    * A 5xx IS AN OUTAGE, NOT A VERDICT ON THIS ENTRY — so it halts and charges nothing.
    *
-   * This block used to assert the opposite (`r.failed === 1`, `attempts === 1`), which is how the
-   * budget came to treat a three-minute outage the same as a permanently malformed body. The
-   * entry stays owed at zero attempts, and the next Stop retries it for free.
+   * Asserting the opposite (`r.failed === 1`, `attempts === 1`) would let the budget treat a
+   * three-minute outage the same as a permanently malformed body. The entry stays owed at zero
+   * attempts, and the next Stop retries it for free.
    */
   const f = fake({ status: 500, body: {} });
   const r = await flush(SID, { fetchImpl: f.impl });
@@ -204,8 +204,8 @@ spool(SID, 'e3', cand(3));
   const s = read(SID);
   eq('a genuinely rejected entry is still parked', s.parked.length, 1);
   eq('...and nothing is left owed', s.owed.length, 0);
-  // The REASON is on disk, not the old constant 'propose returned null'. A parked entry's only
-  // surviving evidence is this line, and it used to record that it failed without recording why.
+  // The REASON is on disk, not a constant like 'propose returned null'. A parked entry's only
+  // surviving evidence is this line, so it must record why it failed, not just that it did.
   check('...with the REASON recorded, not a constant string',
     fs.readFileSync(P, 'utf8').includes('"why":"rejected"'),
     fs.readFileSync(P, 'utf8').split('\n').filter((l) => l.includes('failed')).join(' | '));
@@ -237,6 +237,39 @@ spool(SID, 'e5', cand(5));
   const s = read(SID);
   eq('a rate-limited entry parks nothing', s.parked.length, 0);
   eq('...and leaves the entry owed at zero attempts', s.owed[0].attempts, 0);
+}
+
+reset();
+spool(SID, 'e6', cand(6));
+spool(SID, 'e7', cand(7));
+{
+  /**
+   * A 409 VERSION_CONFLICT means another write to the same record committed while this one was being
+   * applied: nothing was written and the same bytes succeed on the next attempt. It must not spend the
+   * entry's retry budget (charged as 'rejected', five such races park the entry for good) and it must
+   * not stop the batch: the entry after it is still attempted.
+   */
+  const f = fake([{ status: 409, body: { errorCode: 'VERSION_CONFLICT' } }, { status: 200, body: { id: 'r7', created: true } }]);
+  const receipt = await flush(SID, { fetchImpl: f.impl });
+  const s = read(SID);
+  eq('both owed entries were attempted: a conflict does not halt the batch', f.calls.length, 2);
+  eq('...the conflicted entry stays owed at zero attempts', s.owed.find((o) => o.externalId === 'e6')?.attempts, 0);
+  eq('...the entry after it synced, so only the conflicted one is still owed', s.owed.map((o) => o.externalId), ['e6']);
+  eq('...nothing is parked', s.parked.length, 0);
+  eq('...the receipt counts it as conflicted and not halted', [receipt.conflicted, receipt.halted], [1, null]);
+  const f2 = fake({ status: 409, body: { errorCode: 'VERSION_CONFLICT' } });
+  for (let i = 0; i < 3; i++) await flush(SID, { fetchImpl: f2.impl });
+  const s2 = read(SID);
+  eq('three more flushes on a persistent conflict leave it owed at zero attempts, nothing parked', [s2.owed[0].attempts, s2.parked.length], [0, 0]);
+}
+reset();
+spool(SID, 'e8', cand(8));
+{
+  // Any other 409 is a property of the entry, not of the moment: still charged, so it is bounded.
+  const f = fake({ status: 409, body: { errorCode: 'SOMETHING_ELSE' } });
+  for (let i = 0; i < 10; i++) await flush(SID, { fetchImpl: f.impl });
+  const s = read(SID);
+  eq('a 409 that is not a version conflict is still charged and parked', s.parked.length, 1);
 }
 
 console.log('\n=== 6. the per-run cap bounds a backlog ===');
@@ -272,10 +305,9 @@ reset();
 console.log('\n=== 8. an unprovisioned schema must NOT spend the retry budget ===');
 {
   /**
-   * THE DEPLOY-GATE BUG, pinned. Hook code ships before the prod context is provisioned — that
+   * THE DEPLOY-GATE CASE, pinned. Hook code ships before the prod context is provisioned — that
    * window is deliberate. If a missing schema counted as a per-entry failure, every proposal made
-   * during it would PARK after the budget and provisioning later would not recover them. Measured
-   * before the fix: owed=0, parked=1 after 3 flushes.
+   * during it would PARK after the budget and provisioning later would not recover them.
    */
   reset();
   try { fs.unlinkSync(candidateSchemaGapFile()); } catch { /* fine */ }
@@ -418,11 +450,11 @@ console.log('\n=== 12. a paused drain reads ONE spool, not all of them ===');
 console.log('\n=== 13. a REVISE also retires the candidate it corrects ===');
 {
   /**
-   * THE REVERSE HALF, which nothing wrote before. `revises` points the new record at the old one;
-   * `pending()` retires the old one by reading `supersededBy` — and the only writer of that field
-   * had no production caller. The queue fold retired a corrected claim and the corpus did not, so
-   * Phase B would have re-offered every candidate ever revised. `--compare` is blind to it: both
-   * stores hold identical externalId sets, which is all it compares.
+   * THE REVERSE HALF of a correction. `revises` points the new record at the old one;
+   * `pending()` retires the old one by reading `supersededBy`, so something must write that field.
+   * The queue fold retires a corrected claim on its own and the corpus does not, so every revised
+   * candidate would be re-offered by the nudge, which reads records. `--compare` is blind to it:
+   * both stores hold identical externalId sets and claim content.
    */
   reset();
   try { fs.unlinkSync(spoolPath('sup-target')); } catch { /* fine */ }
@@ -447,11 +479,11 @@ console.log('\n=== 13. a REVISE also retires the candidate it corrects ===');
   check('the OLD record is patched, by id resolved from its externalId', !!patchCall,
     calls.map((c) => c.url).join(' | '));
   eq('...with the corrector as supersededBy', patchCall?.b?.payload?.supersededBy, 's:new');
-  // A target that predates the cutover has no row. That is not retryable and must not park.
+  // A target proposed before records were written has no row. That is not retryable and must not park.
   reset();
   const empty = async (url) => ({ ok: true, status: 200, headers: { get: () => null }, text: async () => '',
     json: async () => (url.includes('/lookup') ? { data: [] } : { id: 'x', payload: {} }) });
-  spoolSupersede(SID, 's:pre-cutover', 's:new');
+  spoolSupersede(SID, 's:pre-spool', 's:new');
   const r2 = await flush(SID, { fetchImpl: empty });
   eq('a missing target is treated as done, not retried forever', r2.synced, 1);
   eq('...and parks nothing', read(SID).parked.length, 0);
@@ -487,10 +519,10 @@ console.log('\n=== 14. a quarantine verdict settles on the FIRST attempt, never 
    * LOAD-BEARING (redaction gate, propose()'s CHARGEABLE/quarantine split). The classifier behind
    * the redaction gate is a SAMPLED model call, not a deterministic check — so retrying a quarantine
    * verdict on a later flush is not "trying the same bytes again", it is drawing again from a
-   * distribution. Before this fix, a quarantine was charged through the generic CHARGEABLE path and
-   * re-classified on every flush up to SPOOL_MAX_ATTEMPTS times; any ONE lucky "clean" draw among
-   * those retries would have shipped it. This test proves the fix: one flush settles it for good,
-   * and NO amount of further flushing ever calls the gate — or the network — again.
+   * distribution. A quarantine charged through the generic CHARGEABLE path would be re-classified
+   * on every flush up to SPOOL_MAX_ATTEMPTS times, and any ONE lucky "clean" draw among those
+   * retries would ship it. This test proves it is not: one flush settles it for good, and NO
+   * amount of further flushing ever calls the gate — or the network — again.
    */
   reset();
   spool(SID, 'q1', cand(1));

@@ -1,7 +1,7 @@
-// RED-PROOF: dispose.mjs's session-id PREFIX resolution — before this, pasting the 8-char id an
-// ORPHAN-NUDGE line displays straight into dispose.mjs silently rendered "No pending candidates",
+// RED-PROOF: dispose.mjs's session-id PREFIX resolution — pasting the 8-char id an ORPHAN-NUDGE
+// line displays straight into dispose.mjs must not silently render "No pending candidates",
 // indistinguishable from a genuinely empty queue (bySession does an EXACT sessionId match, so a
-// prefix simply matched nothing). This file proves: a full-length id (any shape, not just a UUID
+// prefix would simply match nothing). This file proves: a full-length id (any shape, not just a UUID
 // — this suite's own fixture ids are plain descriptive strings) is completely unaffected; an
 // unambiguous 8-char prefix resolves and actually lists/settles the real candidates; a prefix
 // matching zero or multiple sessions refuses loudly instead of guessing.
@@ -118,9 +118,9 @@ const SID5 = randomUUID();
 console.log('\n=== 6. a GENUINE 8-char-exactly full id, with its own local file, resolves as literal ===');
 {
   // The boundary case: at exactly SID_DISPLAY_LEN characters, a real full id
-  // and a truncated prefix are indistinguishable by length alone. This confirms the fix — when its
-  // own file is the ONLY candidate that matches, a real short id resolves cleanly, exactly as the
-  // old exact-match code always did, never as an ambiguous prefix. (Case 9 below covers what
+  // and a truncated prefix are indistinguishable by length alone. When its own file is the ONLY
+  // candidate that matches, a real short id resolves cleanly, exactly as an exact-match lookup
+  // would, never as an ambiguous prefix. (Case 9 below covers what
   // happens when it is NOT the only candidate.)
   const sid = 'abcdef12'; // exactly 8 chars, its own genuine id, not a truncation of anything
   seed(sid, 'a genuine 8-char full id, not a prefix of anything');
@@ -165,15 +165,14 @@ const SID8 = randomUUID();
 
 console.log('\n=== 9. a LITERAL short id colliding with a longer sibling\'s prefix refuses, never silently picks the literal ===');
 {
-  // The real bug: an earlier version checked "does a
-  // local file exist for the literal input?" FIRST and returned it immediately, without ever
-  // checking whether that same literal input could ALSO be a truncated prefix of some other,
-  // longer session's id sitting in the same queue directory. Two candidates for one input is
-  // exactly as unresolvable as an ordinary multi-way prefix collision (case 4 above) — silently
-  // preferring the literal would have been the exact silent failure mode this file exists to
-  // refuse. Not reachable by two genuine Claude Code sessions (real ids are always 36-char UUIDs,
-  // never exactly 8 characters), but fully reachable for the short descriptive ids this file's own
-  // header says are supported.
+  // The bug this guards: checking "does a local file exist for the literal input?" FIRST and
+  // returning it immediately, without ever checking whether that same literal input could ALSO be
+  // a truncated prefix of some other, longer session's id sitting in the same queue directory.
+  // Two candidates for one input is exactly as unresolvable as an ordinary multi-way prefix
+  // collision (case 4 above) — silently preferring the literal would be the exact silent failure
+  // mode this file exists to refuse. Not reachable by two genuine Claude Code sessions (real ids
+  // are always 36-char UUIDs, never exactly 8 characters), but fully reachable for the short
+  // descriptive ids this file's own header says are supported.
   const literalSid = 'abc12345'; // exactly 8 chars, its own genuine id
   const longerSibling = literalSid + '-' + randomUUID(); // a DIFFERENT, longer session whose id starts with the same 8 characters
   seed(literalSid, 'the genuine 8-char id being collided with');

@@ -8,9 +8,7 @@
  * empirically against a live environment.
  *
  * WHAT THIS MODULE IS. The transport and the contract — nothing else. It does not decide when to
- * propose, what is worth storing, or how a nudge reads. Those live in the callers, exactly as they
- * did when the corpus was a JSONL file, so this change is a storage swap and not a rewrite of the
- * loop.
+ * propose, what is worth storing, or how a nudge reads. Those live in the callers.
  *
  * THREE CONTRACTS, all learned the hard way elsewhere in this tree:
  *
@@ -18,38 +16,37 @@
  *      empty) when it did. `enumerate.mjs` documents why at length: a caller that cannot tell "no
  *      candidates" from "the API is down" will silently treat an outage as an empty queue, and the
  *      nudge — the ONLY thing that tells an agent candidates are waiting — simply never fires. No
- *      nudge looks exactly like no candidates. → this discipline's second half (missing is not the same as broken): missing is not broken.
+ *      nudge looks exactly like no candidates (the receipt rule's second half: missing is not
+ *      the same as broken).
  *
  *   2. A MISSING SCHEMA IS A CONFIGURATION STATE, NOT A FAULT. An adopter who has not provisioned
- *      the type, or this repo before the prod context is updated, gets `400 No schema found for
- *      type 'candidate'` on every single Stop. That is not an error to retry, it is an environment
- *      that cannot serve this feature yet, and the right response is to stop asking — quietly,
- *      cheaply, and self-healingly. See `schemaGap` below.
+ *      the type gets `400 No schema found for type 'candidate'` on every single Stop. That is not
+ *      an error to retry, it is an environment that cannot serve this feature yet, and the right
+ *      response is to stop asking — quietly, cheaply, and self-healingly. See `schemaGap` below.
  *
  *   3. THE TWO ENDPOINTS DISAGREE ABOUT THEIR OWN FIELD NAMES, and one of them fails SILENTLY.
  *      `POST /v1/records` takes `typeName` + `payload` and IGNORES unknown keys; `POST
  *      /v1/records/lookup` takes `type` (not `typeName`) and REJECTS unknown keys with a 400.
  *      Sending `data` instead of `payload` therefore creates a record with an EMPTY payload and
- *      returns 200 — no error anywhere. That cost two full verification runs against staging: the
- *      records existed, the lookups returned nothing, and every "search cannot find it" assertion
- *      passed for the wrong reason. The shapes are centralised here so no caller can get them
- *      wrong twice.
+ *      returns 200 — no error anywhere: the records exist, the lookups return nothing, and every
+ *      "search cannot find it" assertion passes for the wrong reason. The shapes are centralised
+ *      here so no caller can get them wrong twice.
  */
 import fs from 'node:fs';
 import { cred } from './creds.mjs';
 import { hlog } from './hooklog.mjs';
 import { candidateSchemaGapFile, verdictMutationsOffFile } from './paths.mjs';
 import { CANDIDATE_TIMEOUT_MS, CANDIDATE_PAGE_LIMIT, CANDIDATE_MAX_PAGES, CANDIDATE_SCHEMA_RECHECK_MS } from './config.mjs';
-// Imported from queue.mjs (and re-exported) rather than re-declared here — this file used to
-// define its OWN `new Set(['stored','documented','ignored'])`,
-// independently of queue.mjs's identical set. The two happened to agree, but nothing enforced it:
-// a disposition value added to one without the other would let `dispose.mjs`'s CLI validation (via
-// queue.mjs's set) silently diverge from `settle()`'s validation here against the actual record
-// schema. One declaration, one place it can drift from. NOTE: `export { X } from './mod.mjs'` is a
+// Imported from queue.mjs (and re-exported) rather than re-declared here: a second, independent
+// `new Set(['stored','documented','ignored'])` would let a disposition value added to one without
+// the other silently diverge `dispose.mjs`'s CLI validation (via queue.mjs's set) from
+// `settle()`'s validation here against the actual record schema. One declaration, nothing to
+// drift. NOTE: `export { X } from './mod.mjs'` is a
 // pure re-export — it does NOT bind `X` locally, so `settle()` below needs the real `import`.
 import { DISPOSITIONS } from './queue.mjs';
 export { DISPOSITIONS };
 import { gate } from './redact.mjs';
+import { kindOf, destOf } from './candidate-fields.mjs';
 
 const BASE = (cred('VECTROS_API_BASE_URL') || 'https://api.vectros.ai').replace(/\/+$/, '');
 
@@ -72,18 +69,17 @@ function schemaGapActive(now = Date.now()) {
   try {
     const age = now - fs.statSync(gapFile()).mtimeMs;
     /**
-     * A NEGATIVE age counts as ACTIVE, and that is not defensive padding — it is the bug this
-     * function shipped with.
+     * A NEGATIVE age counts as ACTIVE, and that is not defensive padding.
      *
-     * The guard was `age >= 0 && age < TTL`, on the reasoning that a future-dated marker is
-     * nonsense. But `Date.now()` and a file's `mtimeMs` are two different clocks, and on Windows
-     * the filesystem stamp can land AHEAD of the wall clock by a fraction of a millisecond:
-     * measured `now - mtime = -0.234ms` on a file written on the line before. So the marker
-     * written by `markSchemaGap` was read back as "not active" whenever that race went the wrong
-     * way — SOMETIMES — and the latch silently failed to latch.
+     * A guard of `age >= 0 && age < TTL` (a future-dated marker is nonsense) is wrong:
+     * `Date.now()` and a file's `mtimeMs` are two different clocks, and on Windows the filesystem
+     * stamp can land AHEAD of the wall clock by a fraction of a millisecond (measured
+     * `now - mtime = -0.234ms` on a file written on the line before). The marker written by
+     * `markSchemaGap` would then be read back as "not active" whenever that race went the wrong
+     * way — SOMETIMES — and the latch would silently fail to latch.
      *
-     * The cost was exactly what the marker exists to prevent: an unprovisioned context paying a
-     * failed round trip on every Stop (~2/min) instead of one an hour, flakily, so a
+     * The cost would be exactly what the marker exists to prevent: an unprovisioned context paying
+     * a failed round trip on every Stop (~2/min) instead of one an hour, flakily, so a
      * reproduction attempt would mostly show it working.
      *
      * Treating "ahead of the clock" as active is also the semantically right reading — a marker
@@ -157,6 +153,11 @@ function isMissingSchema(status, bodyText) {
  *                     (SPOOL_FLUSH_MAX_PER_RUN x SPOOL_DRAIN_MAX_SESSIONS, up to dozens of calls in
  *                     quick succession) permanently PARK real candidates after SPOOL_MAX_ATTEMPTS,
  *                     for a reason no proposal caused and no retry-of-the-same-bytes could fix.
+ *   'conflict'      — 409 with errorCode VERSION_CONFLICT. Another write to the same record committed while
+ *                     this one was being applied; nothing was written, and the same bytes succeed on the
+ *                     next attempt. A property of the MOMENT, not the entry, so it is not charged and does
+ *                     not halt the batch: the entry stays owed and the rest of the batch proceeds. Any other
+ *                     409 stays `rejected`.
  *   'schema-absent' — the type is not provisioned here. A property of the ENVIRONMENT.
  *   'unreachable'   — 5xx, timeout, DNS, offline, OR the redaction gate's classifier could not be
  *                     ASKED at all (spawn failure, timeout, missing prompt file — → redact.mjs's
@@ -235,7 +236,12 @@ async function call(path, body, { fetchImpl = fetch, what = 'call', method = 'PO
         return why('schema-absent');
       }
       let requestId = null;
-      try { requestId = JSON.parse(text)?.requestId ?? null; } catch { /* silence-ok: not every error body is the JSON contract (a WAF block is HTML) */ }
+      let errorCode = null;
+      try {
+        const body = JSON.parse(text);
+        requestId = body?.requestId ?? null;
+        errorCode = body?.errorCode ?? null;
+      } catch { /* silence-ok: not every error body is the JSON contract (a WAF block is HTML) */ }
       const cfId = typeof res.headers?.get === 'function' ? (res.headers.get('x-amz-cf-id') || '(none)') : '(none)';
       /**
        * THE CLASSIFICATION, and the 401/403/429 splits are the ones that were missing.
@@ -249,6 +255,7 @@ async function call(path, body, { fetchImpl = fetch, what = 'call', method = 'PO
        */
       const reason = res.status === 401 || res.status === 403 ? 'auth'
         : res.status === 429 ? 'rate-limited'
+        : res.status === 409 && errorCode === 'VERSION_CONFLICT' ? 'conflict'
         : (res.status >= 400 && res.status < 500) ? 'rejected'
         : 'unreachable';
       hlog('candidates',
@@ -306,8 +313,8 @@ function normalise(rec) {
     revises: field(rec, 'revises') ?? null,
     supersededBy: field(rec, 'supersededBy') ?? null,
     // The proposal's own metadata, carried through unchanged. `dest` and `sourceRef` are
-    // RENDERED (the nudge line and `dispose --list`), so dropping them here would quietly
-    // strip the review surface the moment reads flip to records; `area` and `tags` are the
+    // RENDERED (the nudge line and `dispose --list`, both read from records), so dropping them
+    // here would quietly strip the review surface; `area` and `tags` are the
     // fields a verified candidate is copied into a memory with. → the schema mirrors `memory`.
     dest: field(rec, 'dest') ?? null,
     area: field(rec, 'area') ?? null,
@@ -317,25 +324,25 @@ function normalise(rec) {
 }
 
 /**
- * ORDER IS DERIVED, NEVER ALLOCATED — and that is a fix carried forward, not a preference.
+ * ORDER IS DERIVED, NEVER ALLOCATED — a correctness rule, not a preference.
  *
- * The file-backed queue numbered candidates by their ORDINAL in an append log, because the
- * previous scheme minted ids from a shared mutable count: two concurrent workers both computed
- * `c1` and the fold silently destroyed one of them. An `externalId`-keyed upsert would reintroduce
- * exactly that if the id were derived from a count of what already exists.
+ * The local queue numbers candidates by their ORDINAL in an append log (the fold assigns it)
+ * because ids minted from a shared mutable count race: two concurrent workers both compute `c1`
+ * and one candidate is silently destroyed. An `externalId`-keyed upsert would reintroduce exactly
+ * that if the id were derived from a count of what already exists.
  *
  * So nothing allocates. The worker mints a uuid before its first write attempt (which is also what
  * makes a retry idempotent — the same externalId upserts instead of duplicating), and the display
  * ordinal is computed HERE by sorting.
  *
- * THE SORT KEY IS THE SERVER'S `createdAt`, and the first version of this was not stable — which
- * matters because an ordinal is an ADDRESS: `dispose.mjs <sessionId> c2=stored:…` is how an agent
- * acts on a nudge, one turn after reading it.
+ * THE SORT KEY IS THE SERVER'S `createdAt`, because the order must be stable: an ordinal is an
+ * ADDRESS, and `dispose.mjs <sessionId> c2=stored:…` is how an agent acts on a nudge, one turn
+ * after reading it.
  *
- * It sorted on `proposedAt` (a `date` field — DAY-granular) with the random uuid as tiebreak. So
- * within a day the order was arbitrary, and a candidate proposed later could sort BEFORE an earlier
- * one, shifting every ordinal after it. MEASURED: A was `c2`, became `c3` when C arrived, and `c2`
- * again once B was settled. An agent settling `c2` a turn later settles a different candidate.
+ * Sorting on `proposedAt` (a `date` field — DAY-granular) with the random uuid as tiebreak would
+ * leave the order arbitrary within a day, so a candidate proposed later could sort BEFORE an
+ * earlier one and shift every ordinal after it: A is `c2`, becomes `c3` when C arrives, and `c2`
+ * again once B is settled. An agent settling `c2` a turn later would settle a different candidate.
  *
  * `createdAt` is server-assigned at millisecond precision in true creation order — verified present
  * on every lookup row against staging. `proposedAt` cannot serve: the platform REJECTS a full ISO
@@ -343,11 +350,10 @@ function normalise(rec) {
  * query it exists for. The remaining tiebreaks only run for rows created in the same millisecond,
  * where both already exist, so the order is stable from then on.
  *
- * NUMBER OVER THE WHOLE SESSION, never a filtered subset — the second half of the same bug. The
- * queue numbered positionally over ALL propose/revise events, so a settled candidate KEPT its slot
- * and `c3` was `c3` for the life of the session. Numbering a filtered set renumbers everything
- * after each settle. That is why `bySession` (settled included) assigns ordinals and `pending`
- * does not.
+ * NUMBER OVER THE WHOLE SESSION, never a filtered subset. The queue numbers positionally over ALL
+ * propose/revise events, so a settled candidate KEEPS its slot and `c3` is `c3` for the life of the
+ * session. Numbering a filtered set renumbers everything after each settle. That is why
+ * `bySession` (settled included) assigns ordinals and `pending` does not.
  */
 export function withOrdinals(recs) {
   return [...recs]
@@ -405,7 +411,10 @@ export async function propose(sessionId, c, opts = {}) {
   const payload = {
     title: f.title,
     body: f.body,
-    kind: c.kind,
+    // `kind` and `dest` are closed sets and are normalised HERE, at the one place every record is sent from, not only
+    // where a candidate is first built: this also carries entries an earlier version left in the spool or the queue,
+    // whose values were never checked. An off-contract `kind` is dropped, an off-contract `dest` becomes no suggestion.
+    kind: kindOf(c.kind),
     sessionId,
     proposedAt: c.proposedAt || new Date().toISOString().slice(0, 10),
     disposition: 'pending',
@@ -421,7 +430,8 @@ export async function propose(sessionId, c, opts = {}) {
    * previous attempt stored, and a retry carrying a null would erase a good value the first
    * attempt landed. `tags` is dropped when empty for the same reason.
    */
-  if (c.dest) payload.dest = c.dest;
+  const dest = destOf(c.dest);
+  if (dest) payload.dest = dest;
   if (f.area) payload.area = f.area;
   if (f.sourceRef) payload.sourceRef = f.sourceRef;
   if (Array.isArray(f.tags) && f.tags.length) payload.tags = f.tags;
@@ -485,12 +495,11 @@ export async function settle(id, disposition, { ref = null, resolved = null } = 
     return null;
   }
   /**
-   * OMIT WHAT WAS NOT GIVEN — `propose` states this rule and `settle` broke it.
+   * OMIT WHAT WAS NOT GIVEN, as `propose` does.
    *
    * This is a JSON Merge Patch: a member set to `null` is REMOVED, not ignored. Sending
-   * `{ ref: null, resolved: null }` on every settle therefore deleted whatever a previous settle
-   * (or a reopen-then-resettle) had stored, and `reopen` compounded it from the other side by
-   * sending neither — so a reopened candidate kept the `ref` of the verdict just undone.
+   * `{ ref: null, resolved: null }` on every settle would therefore delete whatever a previous
+   * settle (or a reopen-then-resettle) had stored.
    */
   const verdict = { disposition };
   if (ref !== null && ref !== undefined) verdict.ref = ref;
@@ -521,24 +530,21 @@ export async function reopen(id, why, opts = {}) {
 
 /**
  * `settle`/`reopen`, addressed by `externalId` instead of a record `id` — the reverse-lookup
- * shape `supersedeByExternalId` above already established for the same reason: `dispose.mjs`
- * knows a candidate's `externalId` (carried through from the queue event `capture-map.mjs`
- * stamped it into) but not its record `id`, and there is no reverse-reference read, so the id is
- * resolved by looking the externalId up first.
+ * shape `supersedeByExternalId` below uses for the same reason: a caller holding the queue event
+ * (which `capture-map.mjs` stamped with the `externalId`) knows a candidate's `externalId` but not
+ * its record `id`, and there is no reverse-reference read, so the id is resolved by looking the
+ * externalId up first.
  *
- * WHY THIS EXISTS AT ALL — same shape of gap as `supersedeByExternalId`'s own header describes,
- * on the OTHER direction: `dispose.mjs` settles/reopens candidates in the local file queue and,
- * until now, NOTHING wrote the matching record's `disposition` — `settle()`/`reopen()` above were
- * fully built and tested and had zero production callers. A candidate settled via the file queue
- * stayed `disposition: 'pending'` in the record corpus forever, so any reader trusting records
- * would show it as still open indefinitely. Surfaced by exactly the
- * question this file's own `pendingForSession` comment poses ("when reads flip to records...").
+ * WHY THIS EXISTS: a candidate settled through the local queue must also have its record's
+ * `disposition` written. Otherwise it stays `disposition: 'pending'` in the record corpus forever,
+ * and any reader trusting records would show it as still open indefinitely.
  */
 export async function settleByExternalId(externalId, disposition, verdict = {}, opts = {}) {
   if (!externalId) return null;
   const rows = await lookup({ field: 'externalId', value: externalId }, opts);
   if (rows === null) return null;                 // unrunnable — the caller retries
-  if (!rows.length) return { missing: true };      // predates dual-write, or never synced — not an error
+  // Proposed before records were written, or never synced — not an error.
+  if (!rows.length) return { missing: true };
   return settle(rows[0].id, disposition, verdict, opts);
 }
 
@@ -556,13 +562,12 @@ export async function markSuperseded(id, bySupersedingExternalId, opts = {}) {
 /**
  * Mark the candidate with `targetExternalId` as corrected by `byExternalId`.
  *
- * WHY THIS EXISTS AT ALL — the reverse half of a correction was written by NOTHING in production.
- * `capture-map` writes the forward `revises` pointer on the NEW record; `pending()` filters on
- * `supersededBy` on the OLD one; and the only writer of that field was `markSuperseded`, whose
- * sole caller was a test. So the queue fold retired a corrected claim and the record corpus did
- * not — and at Phase B every candidate ever revised would have re-entered the review queue, with
- * the corpus already full of the un-marked backlog Phase A is busy accumulating. `--compare` is
- * structurally blind to it: both stores hold the same externalIds.
+ * WHY THIS EXISTS AT ALL — the reverse half of a correction needs a writer. `capture-map` writes
+ * the forward `revises` pointer on the NEW record; `pending()` filters on `supersededBy` on the OLD
+ * one; and this (via `markSuperseded`) is what sets that field. Without it the queue fold retires a
+ * corrected claim and the record corpus does not, so every revised candidate would be re-offered
+ * by the nudge, which reads records. `--compare` is structurally blind to it: both stores hold
+ * the same externalIds.
  *
  * TWO ROUND TRIPS, and the first one is why this is not folded into `patch`. The corrector knows
  * its target's `externalId`; `PATCH` addresses a record by `id`. There is no reverse-reference
@@ -573,37 +578,29 @@ export async function supersedeByExternalId(targetExternalId, byExternalId, opts
   if (!targetExternalId || !byExternalId) return null;
   const rows = await lookup({ field: 'externalId', value: targetExternalId }, opts);
   if (rows === null) return null;                 // unrunnable — the caller retries
-  // NOT an error, and not retryable either: the target predates the cutover (a historical-queue
-  // backfill gives it a row) or was never synced. Reported as done so it stops occupying a retry budget.
+  // NOT an error, and not retryable either: the target was proposed before records were written
+  // (it has no row) or was never synced. Reported as done so it stops occupying a retry budget.
   if (!rows.length) return { missing: true };
   return markSuperseded(rows[0].id, byExternalId, opts);
 }
 
 /**
- * Look up by ONE field.
+ * Look up by ONE field, or by a declared COMPOSITE (see `pendingForSession`).
  *
- * ⚠ THIS USED TO SAY "the only shape the store offers", AND THAT IS NO LONGER TRUE. The backend
- * has since added CONJUNCTIVE lookups: a schema can declare `{ fieldNames: ['a','b'] }`, the
- * identity travels as a scalar `field=a,b`, and the tuple rides an optional `values[]`.
- *
- * One field is still the only shape THIS CLIENT SENDS, and the first reason is structural rather
- * than a lag:
+ * The backend supports CONJUNCTIVE lookups: a schema can declare `{ fieldNames: ['a','b'] }`, the
+ * identity travels as a scalar `field=a,b`, and the tuple rides an optional `values[]`. Two
+ * constraints decide which callers can use one:
  *
  *   1. **A COMPOSITE MUST BE DECLARED AS ONE.** `values` works only against a lookup the SCHEMA
  *      declared over several fields together (`fieldNames: [...]`). You CANNOT combine two
  *      independently-declared single-field lookups by comma-joining `field` — and `candidate`
- *      declares `disposition` and `sessionId` separately. So there is no composite here to query,
- *      whatever the client can send.
+ *      declares `disposition` and `sessionId` separately, so only the composites it declares can
+ *      be queried that way.
  *   2. the declaration is migration-locked and costs one of `MAX_LOOKUP_FIELDS` (10) permanently,
  *      so adding one is a deliberate per-schema choice, not a free upgrade.
- *   3. as of writing, not every consumer in this ecosystem can even AUTHOR a composite
- *      declaration or emit the wire shape yet — treat this reason as expiring, unlike (1).
  *
- * Left as a single-field call on purpose. Recorded here because the CLAIM was load-bearing in
- * three places on this branch and the platform falsified it from outside while the branch sat —
- * nothing in this file would ever have re-checked it on its own. The lesson: an "impossible"
- * premise embedded in a design comment is never automatically re-verified when the platform it
- * describes changes out from under it — re-check it explicitly before trusting it again.
+ * Constraint 1 describes the backend as it is today. It is not re-verified when the backend changes
+ * underneath it: re-check it against the lookup API before relying on it after a backend change.
  *
  * `type`, NOT `typeName` (contract 3). This endpoint rejects unknown keys, so the wrong spelling
  * 400s loudly rather than silently — the opposite of the create path, and the reason both spellings
@@ -615,12 +612,12 @@ async function lookup(body, opts) {
    *
    * `pending()` claims "every UNSETTLED candidate, across all sessions" and `bySession()` claims
    * "one session's candidates, settled ones included". Both read one page of at most
-   * `CANDIDATE_PAGE_LIMIT` (100, the API maximum) and returned. Past 100 the review queue silently
-   * dropped its tail — and worse, `withOrdinals` renumbered `c1…cN` over whichever subset came
-   * back, so the ids an agent was nudged with addressed different candidates on the next run.
-   * `--compare` would have called every candidate past page 1 `unspooled`, i.e. the counter it
-   * labels "should be 0", turning the Phase A exit criterion into a false-alarm generator at
-   * exactly the scale it exists to certify. Latent at today's ~62; not latent for long.
+   * `CANDIDATE_PAGE_LIMIT` (100, the API maximum); stopping there would silently drop the review
+   * queue's tail past 100 — and worse, `withOrdinals` would renumber `c1…cN` over whichever subset
+   * came back, so the ids an agent was nudged with would address different candidates on the next
+   * run. `--compare` would call every candidate past page 1 `unspooled`, i.e. the counter it
+   * labels "should be 0", making it a false-alarm generator at exactly the scale it exists to
+   * certify.
    */
   const out = [];
   let cursor;
@@ -632,13 +629,12 @@ async function lookup(body, opts) {
       // `undefined` — a candidate with no body, which reads as an empty queue rather than an
       // error. Nothing caps a candidate body, so that is one long proposal away.
       //
-      // The resume field is `startFrom`, NOT `cursor` — the guessable name a prior version of
-      // this file sent. `/v1/records/lookup` rejects unknown keys (contract 3 above), so the
-      // wrong spelling 400s, but only once a corpus exceeds one page: `cursor` is falsy and
-      // omitted entirely on page 1, so the defect shipped invisibly until a real queue grew past
-      // `CANDIDATE_PAGE_LIMIT`. ECHO the value the previous page handed back in `nextCursor` —
-      // never derive one from a row — the cursor is opaque and authenticated server-side; a
-      // fabricated one fails verification with its own 400.
+      // The resume field is `startFrom`, NOT `cursor` (the guessable name). `/v1/records/lookup`
+      // rejects unknown keys (contract 3 above), so the wrong spelling 400s, but only once a corpus
+      // exceeds one page: `cursor` is falsy and omitted entirely on page 1, so the mistake stays
+      // invisible until a real queue grows past `CANDIDATE_PAGE_LIMIT`. ECHO the value the
+      // previous page handed back in `nextCursor` — never derive one from a row — the cursor is
+      // opaque and authenticated server-side; a fabricated one fails verification with its own 400.
       { type: TYPE, limit: CANDIDATE_PAGE_LIMIT, includePayload: true, ...body, ...(cursor ? { startFrom: cursor } : {}) },
       opts);
     if (!r) return null;
@@ -662,17 +658,12 @@ async function lookup(body, opts) {
 /**
  * Every UNSETTLED candidate, across all sessions — the review queue in one indexed call.
  *
- * This is the flexibility the move buys. The file-backed version answered the same question by
- * listing the queue directory and folding all 62 files on EVERY prompt; here it is one lookup on
- * an indexed field.
+ * This is one lookup on an indexed field; the local queue can answer the same question only by
+ * listing the queue directory and folding every file.
  *
  * PENDING IS TWO CONDITIONS, and only one of them is a lookup. A candidate is open when its
  * disposition is `pending` AND nothing has superseded it, so the supersession half is filtered
- * client-side.
- *
- * ⚠ THE REASON THIS COMMENT USED TO GIVE — "a lookup matches a single field … the general gap is
- * tracked at the platform level" — IS DEAD. That gap has since been closed; conjunctive lookups
- * exist now. The client-side filter is still right, for a reason that does not expire:
+ * client-side. Conjunctive lookups do not remove the need, for a structural reason:
  *
  *   `supersededBy` is an ABSENCE predicate. Every lookup leg — plain or composite — matches an
  *   exact PRESENT value: the composite wire form is a positional `values[]` of strings, and the
@@ -681,13 +672,7 @@ async function lookup(body, opts) {
  *   ASK for that group. So "disposition=pending AND supersededBy is unset" is not a conjunction
  *   the index can serve, however many legs it grows.
  *
- *   NOT probed — read off the documented wire contract. An earlier draft of this comment also
- *   cited a specific deployed tool's shape as evidence, which was true when written and false
- *   within hours: that tool shipped composite support shortly after. Deleted rather than
- *   corrected, because the deployed-tool-shape citation was never load-bearing and was always
- *   going to rot; the wire contract is the durable one — the platform's own state had moved
- *   during the session, underscoring the point above about never trusting an unrenewed
- *   "impossible" premise.
+ *   NOT probed against a live server — read off the documented wire contract.
  *
  * The cheapness argument still holds independently: the pending set is small and `disposition` is
  * the selective leg.
@@ -720,10 +705,10 @@ export async function bySession(sessionId, opts = {}) {
 /**
  * ONE session's UNSETTLED candidates — the composite lookup, and the hottest read here.
  *
- * This is what the nudge asks on EVERY prompt: `recall.mjs` reads `readQueue(sessionId)` and
- * renders "MEMORY CANDIDATES (n pending) — from THIS session's transcript". Phase A answers it
- * from the queue file; when reads flip to records, this is the call that replaces it, and it is
- * the reason `candidate` spends a declaration on `{ fieldNames: ['sessionId','disposition'] }`.
+ * This is the cheap form of the question the nudge asks on EVERY prompt ("MEMORY CANDIDATES
+ * (n pending) — from THIS session's transcript"), and it is the reason `candidate` spends a
+ * declaration on `{ fieldNames: ['sessionId','disposition'] }`. (`recall.mjs` itself needs stable
+ * addresses and so uses `addressablePending`, below.)
  *
  * NOT `bySession(...).filter(...)`. The difference is not tidiness — the filtered-out rows are
  * every candidate the session ever SETTLED, which is unbounded in the session's lifetime while
@@ -756,19 +741,19 @@ export async function proposedBetween(from, to, opts = {}) {
 
 /**
  * ONE session's pending candidates, with STABLE addresses — what `dispose.mjs` and the live nudge
- * both need since the full flip to records-driven addressing.
+ * both need: addressing is driven by records.
  *
  * Built on `bySession`, deliberately NOT `pendingForSession`. `pendingForSession`'s own header
  * already warns why: its ordinals are assigned over the UNSETTLED SUBSET, which shrinks as
  * candidates settle, shifting every ordinal after each one — "callers that print an address for a
  * human to type must use `bySession`; this one is not for addresses." `bySession` numbers ALL of a
  * session's candidates ever, settled included, so `c2` stays `c2` for the life of the session even
- * after `c1` settles — the exact guarantee the file-backed queue gave (`queue.mjs`'s own "NUMBER
- * OVER THE WHOLE SESSION, never a filtered subset" fix), now sourced from records.
+ * after `c1` settles — the same guarantee the local queue gives (it numbers over the whole
+ * session), sourced from records.
  *
  * The cost is reading a session's full candidate history rather than `pendingForSession`'s narrow
- * composite lookup — but that is a like-for-like trade, not a new expense: the file-backed reader
- * this replaces (`readQueue(sessionId)`) already folds the WHOLE append log on every call.
+ * composite lookup — a like-for-like trade, since `readQueue(sessionId)` also folds the WHOLE
+ * append log on every call.
  */
 export async function addressablePending(sessionId, opts = {}) {
   const rows = await bySession(sessionId, opts);

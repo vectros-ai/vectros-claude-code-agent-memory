@@ -2,18 +2,18 @@
  * Shared static-scan primitives for the hook lints. No dependencies — these files run as bare
  * .mjs from ~/.claude, so a real parser is not available and this is the honest substitute.
  *
- * Three customers so far: `receipt-lint-test.mjs` (this discipline clause 2), `undeclared-const-test.mjs`
+ * Three customers so far: `receipt-lint-test.mjs` (the receipt rule clause 2), `undeclared-const-test.mjs`
  * (the strict-mode ReferenceError census) and `paths-test.mjs` (the hardcoded-root census). It
  * lives here rather than in any of them because the second one needed it, and a copy would have
- * been the very thing this discipline is about.
+ * been the duplicate-primitive drift the lint exists to prevent.
  */
 
 /**
  * Blank comments and string/template literals to spaces, PRESERVING length and newlines, so a
  * scanner cannot be fooled by a `{` inside a string and offsets still map to line numbers.
  *
- * A CONTEXT STACK, not a flat mode — the first draft was flat and the self-check caught it within
- * a minute. `project.mjs:135` contains a NESTED template literal:
+ * A CONTEXT STACK, not a flat mode — a flat scanner fails on a NESTED template literal, as
+ * `project.mjs` contains:
  *
  *     `- **[p${pri}]${kind ? ` (${kind})` : ''} ${title}** — ${hook}`
  *

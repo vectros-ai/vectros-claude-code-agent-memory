@@ -66,7 +66,7 @@ const stateF = (over = {}) => ({ sid: 's1', size: 100, mtimeMs: NOW - 60 * DAY, 
 const queueF = (over = {}) => ({ sid: 's1', size: 100, mtimeMs: NOW - 200 * DAY, state: 'ok', pending: [], handedAt: null, lastEventAt: null, ...over });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 1. THE PHANTOM PREDICATE. This proposes retention keyed on "no lastStopAt within N days".
+// 1. THE PHANTOM PREDICATE. Retention keyed on "no lastStopAt within N days" would never fire.
 //    Measured, 5,450 of 5,779 files have NO lastStopAt at all — the field is ABSENT, not stale —
 //    so that predicate matches none of them. These two cases are the difference between a backstop
 //    and a no-op that reports success.
@@ -78,7 +78,7 @@ eq('a YOUNG phantom is kept — the window is real, not a rubber stamp',
   classifyState(stateF({ state: { orientPending: true }, mtimeMs: NOW - 3 * DAY }), NOW, W).action, 'keep');
 /**
  * THE REGRESSION GUARD FOR THE WHOLE DESIGN. If someone "simplifies" the classifier to key on
- * lastStopAt recency alone — which is what the issue text says — this case flips to `keep` and the
+ * lastStopAt recency alone — the tempting simplification — this case flips to `keep` and the
  * reaper silently protects 94% of the corpus forever while still reporting itself healthy.
  */
 check('RED-anchor: the phantom above has NO lastStopAt, so a lastStopAt-only rule would keep it',
@@ -111,10 +111,9 @@ check('and it says WHICH clock it used',
 console.log('\n=== 2. the refusals — each proven against an otherwise-identical prunable sibling ===');
 
 const ancient = { sid: 's1', size: 100, mtimeMs: NOW - 500 * DAY, state: { lastStopAt: NOW - 500 * DAY } };
-// `state: 'ok'` on every queue fixture below is REQUIRED, and its absence was itself a finding:
-// these objects modelled a queue with no read-state at all, which the guard
-// (anything not 'ok' is unknowable, so it stays) correctly refuses. A fixture that cannot express
-// the field the code branches on cannot test the branch.
+// `state: 'ok'` on every queue fixture below is REQUIRED: an object modelling a queue with no
+// read-state at all is correctly refused by the guard (anything not 'ok' is unknowable, so it
+// stays). A fixture that cannot express the field the code branches on cannot test the branch.
 const okQ = (over = {}) => ({ state: 'ok', pending: [], handedAt: null, ...over });
 eq('control: with a settled queue, a 500d-old state file IS prunable',
   classifyState({ ...ancient, queue: okQ() }, NOW, W).action, 'prune');
@@ -150,8 +149,8 @@ eq('an UNREADABLE queue is kept — its pending set is unknown', classifyQueue(q
  * event a live queue gets — moves mtime and NEITHER field. So `??` let a stale `lastEventAt` mask a
  * fresh mtime, and a settled queue whose session was resumed today was pruned on a 100-day-old
  * `handed`. What goes is the watermark AND the disposed/superseded sets, so the delta gate rewinds
- * to zero and re-proposes everything already settled. Every fixture above pins `lastEventAt: null`,
- * which is exactly why the branch had no coverage.
+ * to zero and re-proposes everything already settled. A fixture pinning `lastEventAt: null`
+ * never reaches this code path, so it needs a case of its own.
  */
 eq('a settled queue with a STALE lastEventAt but a FRESH mtime is KEPT (a captured append moves only mtime)',
   classifyQueue(queueF({ lastEventAt: NOW - 200 * DAY, mtimeMs: NOW }), NOW, W).action, 'keep');
@@ -220,12 +219,12 @@ console.log('\n=== 4. end to end against a disposable root ===');
   fs.mkdirSync(QD, { recursive: true });
 
   /**
-   * EVERY mtime IS SET EXPLICITLY, including the "fresh" one — and the first cut of this test did
-   * not, which is worth the comment because the failure was silent-looking rather than obvious.
+   * EVERY mtime IS SET EXPLICITLY, including the "fresh" one — leaving one unset fails
+   * silent-looking rather than obvious.
    *
    * `NOW` is a fixed clock in 2027 so the assertions do not drift; a file just written carries the
-   * REAL mtime, which is ~174 days BEFORE that. So the "fresh" phantom aged 174d against a 7d window
-   * and was correctly pruned by code that was working perfectly. A fixed fake clock and real
+   * REAL mtime, which is ~174 days BEFORE that. So an unstamped "fresh" phantom ages 174d against a
+   * 7d window and is correctly pruned by code that is working perfectly. A fixed fake clock and real
    * filesystem timestamps cannot be mixed — either both are real or both are stamped.
    */
   const write = (sid, body, ageDays) => {
@@ -326,11 +325,11 @@ console.log('\n=== 5. the receipt distinguishes what a count cannot ===');
 console.log('\n=== 6. the debounce, and that a dry run really is dry ===');
 {
   /**
-   * A DRY RUN MUST BE PROVEN AGAINST SOMETHING PRUNABLE. The first version of this case asserted
-   * only "the directory has the same file count afterwards" — but §4 had already deleted the one
-   * prunable file, so `plan.prune` was EMPTY and the assertion passed identically whether
-   * `apply:false` was honoured or ignored. Hard-coding `apply = true` inside `runReap` left it
-   * green. So: seed a file that WOULD be reaped, then prove it survives.
+   * A DRY RUN MUST BE PROVEN AGAINST SOMETHING PRUNABLE. Asserting only "the directory has the
+   * same file count afterwards" is vacuous when §4 has already deleted the one prunable file:
+   * `plan.prune` is EMPTY and the assertion passes identically whether `apply:false` is honoured
+   * or ignored (hard-coding `apply = true` inside `runReap` would leave it green). So: seed a file
+   * that WOULD be reaped, then prove it survives.
    */
   const doomed = '99999999-9999-9999-9999-999999999999';
   const p = path.join(stateDir(), `${doomed}.json`);
@@ -398,10 +397,10 @@ console.log('\n=== 6. the debounce, and that a dry run really is dry ===');
 // 7. SMOKE MUST NOT DELETE — the end-to-end assertion, spawning capture.mjs the way smoke does.
 //
 //    THIS EXISTS BECAUSE A MANUAL CHECK CAN BE VACUOUS. Measuring the real state-file count before
-//    and after a smoke run, seeing it unchanged, and calling the fix verified is not sufficient —
+//    and after a smoke run, seeing it unchanged, and calling the guard verified is not sufficient —
 //    if `last-reaped` was stamped minutes earlier by an explicit `--apply`, the DEBOUNCE alone
-//    would suppress the reap and produce that exact same unchanged count, even if the fix itself
-//    had never landed (e.g. a scripted replace that silently no-op'd). Two independent failures
+//    would suppress the reap and produce that exact same unchanged count, even if the guard itself
+//    were absent (e.g. a scripted replace that silently no-op'd). Two independent failures
 //    can agree on a green.
 //
 //    So this drives the real child process, with the reap genuinely DUE (no marker), and asserts

@@ -14,8 +14,8 @@
  * appends the model's `body` verbatim and the distiller prompt sets no length bound of its own
  * (the 220/110-char cuts elsewhere are display-only, not a source-side cap). Measured max body
  * 1,605c across the live corpus; the 4,000-char default is a deliberately conservative ceiling
- * under the figure this header used to cite informally (borrowed from POSIX PIPE_BUF, which
- * governs pipes, not regular files — so it was never a real guarantee either way). Truncating,
+ * under the informal figure borrowed from POSIX PIPE_BUF (which governs pipes, not regular files,
+ * so it is no real guarantee either way). Truncating,
  * not rejecting: a shortened memory is still useful, a silently dropped candidate is not.
  *
  * EVENTS
@@ -40,8 +40,8 @@
  *                                                 Only a DISPOSE is undone — a candidate superseded
  *                                                 by a `revise` stays gone, because resurrecting it
  *                                                 would re-offer a claim a later run already
- *                                                 CORRECTED. The two were one `gone` set; they are
- *                                                 different facts and are now tracked separately.
+ *                                                 CORRECTED. Disposal and supersession are different
+ *                                                 facts and are tracked separately.
  *   { op:'handed',   at, toSid }                — an orphaned queue was SURFACED to a live session
  *                                                 for disposal. The claim that stops one dead
  *                                                 session's candidates reaching N agents at once;
@@ -126,8 +126,8 @@ export function read(sessionId) {
      * ENOENT is a FRESH queue and `offset: 0` is correct. Anything else is "can't tell", and
      * `offset: 0` is then catastrophic — this reader would rewind the watermark to zero, which is
      * the exact failure this module exists to prevent (see the header: "a rewound offset re-reads
-     * the arc"). The offset was moved OUT of state.mjs for precisely this reason and then the new
-     * home shipped the same defect in its own reader.
+     * the arc"). The offset lives here rather than in state.mjs for precisely this reason, so
+     * this reader must not reintroduce the defect.
      *
      * Consequence of getting it wrong: one transient EACCES/EBUSY (an AV scanner holding the file,
      * EMFILE under concurrent hooks) => delta = total - 0 => the gate opens => the drain
@@ -138,7 +138,7 @@ export function read(sessionId) {
      */
     // The SAME SHAPE on every path — `disposed`/`superseded` included. A return whose fields depend
     // on which branch produced it makes every consumer guard (`q.disposed?.has`), and one that
-    // forgets is a silent wrong answer. Same rule the sweep's `blocked` field was fixed for.
+    // forgets is a silent wrong answer.
     const empty = (state) => ({ offset: 0, pending: [], all: new Map(), events: 0, sweptAt: null, handedAt: null, handedTo: null, cwd: null, projectDir: null, disposed: new Set(), superseded: new Set(), dispositions: new Map(), state });
     if (e.code === 'ENOENT') return empty('fresh');
     hlog('queue', `READ FAILED (${e.code}) — refusing to report an offset; capture will skip this tick`, sessionId);
@@ -152,20 +152,21 @@ export function read(sessionId) {
   let cwd = null;
   let projectDir = null;
   /**
-   * DISPOSED and SUPERSEDED were ONE `gone` set. They are different facts, and conflating them made
-   * `reopen` unimplementable: undoing a dispose is right (a wrong `ignored` destroyed a true
-   * candidate), while "undoing" a supersede would resurrect a claim a LATER run already corrected —
-   * re-offering the known-wrong version of a candidate whose fix is sitting in the same queue.
+   * DISPOSED and SUPERSEDED are separate sets, not one `gone` set. They are different facts, and
+   * conflating them would make `reopen` unimplementable: undoing a dispose is right (a wrong
+   * `ignored` destroys a true candidate), while "undoing" a supersede would resurrect a claim a
+   * LATER run already corrected — re-offering the known-wrong version of a candidate whose fix is
+   * sitting in the same queue.
    */
   const disposed = new Set();
   const superseded = new Set();
   /**
    * WHICH disposition, not just whether one happened — `disposed`/`superseded` above answer "is it
-   * gone", which is all the fold needed until now. `report.mjs --compare` needs the actual value to
-   * check it against the record corpus's own `disposition` field (the settle-side dual-write gap
-   * now closed), and re-reading the file per candidate the way `dispose.mjs`'s local
-   * `lastDisposition()` does would make that an O(n²) scan across a session's full queue on every
-   * `--compare` run. One extra Map, same single pass, same pattern as `disposed`/`superseded`.
+   * gone". `report.mjs --compare` needs the actual value to check it against the record corpus's
+   * own `disposition` field (the settle-side half of the dual-write), and re-reading the file per
+   * candidate the way `dispose.mjs`'s local `lastDisposition()` does would make that an O(n²) scan
+   * across a session's full queue on every `--compare` run. One extra Map, same single pass, same
+   * pattern as `disposed`/`superseded`.
    */
   const dispositions = new Map();
   const all = new Map();
@@ -182,30 +183,27 @@ export function read(sessionId) {
       if (typeof e.offset === 'number' && e.offset > offset) offset = e.offset;
     } else if (e.op === 'propose' || e.op === 'revise') {
       /**
-       * THE ID IS POSITIONAL, AND THAT IS THE FIX FOR THE DUPLICATE-WORKER RACE.
+       * THE ID IS POSITIONAL, WHICH IS WHAT MAKES A DUPLICATE WORKER HARMLESS.
        *
-       * This was `all.set(e.id, e)` with the id MINTED by the worker via `nextId(all)` — a
-       * read-modify-write over this very fold. Two workers on one snapshot both computed `c1`, both
-       * appended, and last-write-wins here silently DESTROYED the first one's candidate. So the
-       * module header's claim — "an append log, never a read-modify-write ... no lost update" — was
-       * true of the EVENTS and false of the ID ALLOCATION, and a duplicate worker cost CANDIDATES
-       * rather than mere spend. `lock.mjs` was guarding a race whose damage lived here.
+       * An id MINTED by the worker from a count of the fold (a read-modify-write over this very
+       * fold) would race: two workers on one snapshot would both compute `c1`, both append, and
+       * last-write-wins here would silently DESTROY the first one's candidate. The module header's
+       * claim — "an append log, never a read-modify-write ... no lost update" — would then be true
+       * of the EVENTS and false of the ID ALLOCATION, and a duplicate worker would cost CANDIDATES
+       * rather than mere spend. (`lock.mjs` guards against the duplicate worker itself.)
        *
-       * Note where the data actually was: BOTH events reached the log intact. `O_APPEND` did its
-       * job. Only the fold conflated them. So the fix is not a better lock, a wider mutex or a
-       * retry — it is to stop allocating from a shared mutable count at all.
+       * Both events reach the log intact — `O_APPEND` does its job — so the answer is not a better
+       * lock, a wider mutex or a retry; it is to never allocate from a shared mutable count.
        *
        * An append-only log has a total order. Use it: a candidate's id is its ORDINAL among
        * propose/revise events. Two concurrent workers cannot collide, because the log serialized
-       * them the moment they appended — no coordination, nothing to race. `nextId` is deleted
-       * rather than fixed; there is no allocator left to get wrong.
+       * them the moment they appended — no coordination, nothing to race, no allocator to get
+       * wrong.
        *
        * STABLE, because appends only ever add AFTER: nothing renumbers an existing candidate, so
        * `revises`/`dispose` references stay valid, and `c3` is `c3` for the life of the session.
-       * BACKWARD-COMPATIBLE, because the old allocator produced exactly these ordinals on any queue
-       * that never collided — and on one that did, this recovers the candidate the fold was eating.
        * `e.id` is deliberately ignored: a value the writer cannot allocate safely is not a source of
-       * truth. Now a duplicate worker costs SPEND (two similar candidates, both visible, both
+       * truth. A duplicate worker therefore costs SPEND (two similar candidates, both visible, both
        * disposable) and never a lost claim.
        */
       const id = `c${++ord}`;

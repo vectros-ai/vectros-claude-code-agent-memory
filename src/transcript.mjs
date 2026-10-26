@@ -1,6 +1,6 @@
 /**
  * Neutralize the prompt delimiters inside untrusted text before it is interpolated into a nested
- * model's prompt. → capture-worker.mjs, recall-eval-worker.mjs.
+ * model's prompt. → capture-worker.mjs, recall-eval-worker.mjs, redact.mjs.
  *
  * WHY. Every nested prompt is assembled by raw interpolation:
  *
@@ -23,8 +23,15 @@
  * defense. Collapsing a forged tag costs nothing — real prose does not contain these literals,
  * and a session that legitimately discusses them (like the one that wrote this) is better served
  * by a neutered marker than by a model reading its own delimiter.
+ *
+ * The marker replaces only the opening `<`, any slashes or spaces after it, and the tag name. It never
+ * consumes the text that follows: an earlier form also swallowed everything up to the next `>`, so an
+ * unterminated `<query` hid a whole span from the model that was meant to judge it (the candidate
+ * classifier judges one copy of the text while the original is what gets sent), and its unbounded
+ * `[^>]*` made a long run of `<query` quadratic. Neutralising the delimiter alone loses nothing and costs
+ * linear time.
  */
-const FENCE_TAGS = /<\/?\s*(transcript|transcript_delta|pending_candidates|agent_activity|query|results)\b[^>]*>/gi;
+const FENCE_TAGS = /<[\s/]*(transcript|transcript_delta|pending_candidates|agent_activity|query|results|candidate)\b/gi;
 export function fence(s) {
   return String(s ?? '').replace(FENCE_TAGS, '[redacted-tag]');
 }
@@ -49,8 +56,8 @@ import { hlog } from './hooklog.mjs';
  * HOW A TRANSCRIPT IS READ: IN CHUNKS, NEVER AS ONE STRING.
  *
  * A transcript is a JSONL file in which message TEXT is a small fraction of the bytes (tool results
- * dominate: a 276 MiB file held 7.2M characters of text). It used to be read whole with
- * `readFileSync(path, 'utf8')`, and V8 cannot build a string longer than about 512 MiB
+ * dominate: a 276 MiB file held 7.2M characters of text). It is therefore NOT read whole with
+ * `readFileSync(path, 'utf8')`: V8 cannot build a string longer than about 512 MiB
  * (`buffer.constants.MAX_STRING_LENGTH`), so a long-running session eventually became unreadable:
  * the read threw, the length was reported as 0, the capture gate closed, and that session was never
  * distilled again. The sessions that reach that size are the longest-lived ones.
@@ -69,7 +76,7 @@ import { hlog } from './hooklog.mjs';
  *     A line many times longer than a chunk is copied once per chunk, so very long lines are slow.
  *   · Each call still reads the whole file (the offset is a cumulative count of message text, which
  *     can only be known by reading what precedes it). The cost is proportional to the file: seconds
- *     for a file of hundreds of MiB, with memory that no longer grows with it.
+ *     for a file of hundreds of MiB, with memory that does not grow with it.
  */
 const CHUNK_BYTES = 8 * 1024 * 1024;
 
@@ -191,7 +198,7 @@ export function readTranscript(transcriptPath, { retain = true, since = -1, keep
          * of the capture half, and it would be indistinguishable from "nothing new was said".
          *
          * ENOENT is a genuine, common state (a session before its first transcript flush) and stays
-         * quiet per this discipline. Anything else — EBUSY/EPERM from the writer holding the file, EMFILE under
+         * quiet per the receipt rule. Anything else — EBUSY/EPERM from the writer holding the file, EMFILE under
          * concurrent hooks — is the file being THERE and unreadable, and must announce itself.
          */
         if (e.code !== 'ENOENT') {
@@ -293,14 +300,14 @@ export function transcriptLength(transcriptPath) {
  *
  * IT SLICES FORWARD, AND `to` IS THE CONTRACT.
  *
- * This used to keep the most-recent `maxChars` (`text.slice(-maxChars)`) and let the caller mark the
- * whole delta captured — so whenever the cap bound, the HEAD of the delta fell below the watermark
- * unread and was gone for good. MEASURED: 3,019K of 4,219K (72%) of live arc dropped that way, and
- * not only at adoption — a failed distill correctly HOLDS the watermark, so the delta grows and the
- * next success drops everything past the cap (one session: failed at 0K, succeeded at 1391K, 991K
- * gone).
+ * Keeping the most-recent `maxChars` (`text.slice(-maxChars)`) and letting the caller mark the
+ * whole delta captured would, whenever the cap binds, drop the HEAD of the delta below the
+ * watermark unread, gone for good. Measured on live arcs this way: 3,019K of 4,219K (72%) dropped,
+ * and not only at adoption — a failed distill correctly HOLDS the watermark, so the delta grows
+ * and the next success would drop everything past the cap (one session: failed at 0K, succeeded at
+ * 1391K, 991K gone).
  *
- * Now the window is `[fromOffset, to)` taken from the OLDEST unread message forward, and `to` is the
+ * The window is `[fromOffset, to)` taken from the OLDEST unread message forward, and `to` is the
  * exact end offset of the last message included. A caller that marks `to` captured can never skip
  * text: the watermark means "everything below this is distilled" and stays true by construction.
  * `remaining > 0` says more arc is waiting — drain it with another call, do not jump over it.

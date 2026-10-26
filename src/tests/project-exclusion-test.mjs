@@ -44,6 +44,11 @@ function runProjector({ cwd, lists, claudeHome, extraEnv = {} }) {
     CLAUDE_CONFIG_DIR: claudeHome, VECTROS_MEMORY_HOME: home, VECTROS_MEMORY_CONFIG: cfg,
     VECTROS_HOOKLOG_PATH: path.join(home, 'hooks.log'),
     VECTROS_API_BASE_URL: server.url, VECTROS_API_KEY: 'stub-key-project-exclusion-test',
+    // The projector gives each git call a few seconds and, when git does not answer, falls back to discovery
+    // (which, with a directory list set, refuses to write). On a saturated machine a git process can take longer
+    // than that to start, which flipped the repository cases into a refusal at random. Every case here wants git
+    // to answer, so it gets a generous budget; the case that wants git NOT to answer overrides it below.
+    VECTROS_MEM_PROJECT_GIT_TIMEOUT_MS: '120000',
     VECTROS_MEMORY_OFF: '', CLAUDE_PROJECT_DIR: '', ...extraEnv,
     GIT_CEILING_DIRECTORIES: path.dirname(cwd), // a scratch directory must not find a repository above itself
   };
@@ -238,6 +243,32 @@ console.log('\n=== lists that cannot be read ===');
   try {
     const out = await runProjector({ cwd: scratch, lists: { EXCLUDED_DIRECTORIES: 'not-an-array' }, claudeHome });
     check('a broken list turns the projection off too', !wrote(idx), out);
+  } finally { rm(base); rm(claudeHome); }
+}
+
+console.log('\n=== git that does not answer: the receipt names it, and a git that does answer writes ===');
+if (process.platform === 'win32') {
+  console.log('  SKIP  a stub git needs a POSIX shell; this case runs on Linux and macOS');
+} else {
+  const base = mk('project-excl-gitwait-');
+  const repo = path.join(base, 'repo');
+  const stub = path.join(base, 'bin');
+  fs.mkdirSync(repo); fs.mkdirSync(stub);
+  git(repo, 'init', '-q');
+  // A `git` earlier on PATH that never answers within the budget.
+  fs.writeFileSync(path.join(stub, 'git'), '#!/bin/sh\nexec sleep 30\n', { mode: 0o755 });
+  const common = git(repo, 'rev-parse', '--git-common-dir').stdout.trim();
+  const { claudeHome, idx } = claudeWith(slugOf(path.dirname(path.resolve(repo, common))));
+  const lists = { EXCLUDED_DIRECTORIES: [path.join(base, 'unrelated')] };
+  try {
+    const out = await runProjector({
+      cwd: repo, lists, claudeHome,
+      extraEnv: { PATH: `${stub}${path.delimiter}${process.env.PATH}`, VECTROS_MEM_PROJECT_GIT_TIMEOUT_MS: '300' },
+    });
+    check('git does not answer within its budget: nothing is written', !wrote(idx), out);
+    check('...and the receipt names the timeout instead of blaming the directory list', /git did not answer within 300ms/.test(out), out);
+    const control = await runProjector({ cwd: repo, lists, claudeHome });
+    check('control: with the real git answering, the same repository refreshes', wrote(idx), control);
   } finally { rm(base); rm(claudeHome); }
 }
 

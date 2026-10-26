@@ -8,11 +8,10 @@
  * what a "real" session id looks like — then the ORPHANED tally stops being a statement about
  * what the sweep does, which is the only reason that tally exists.
  *
- * It was born inside report.mjs, where it was the right place for one consumer. Copying it into
- * the sweep would have been exactly the mistake this codebase already learned to avoid (the
- * instance in front of you is a SAMPLE — fix the census, do not re-wire one mechanism per site),
- * in the branch whose founding defect that is. So it moves here and BOTH import it. report.mjs re-exports
- * the same symbols, so `tests/residual-test.mjs` and any operator muscle memory keep working.
+ * It lives here, not in report.mjs, because both report.mjs and the sweep consume it. Copying it
+ * into the sweep would drift (fix the census, do not re-wire one mechanism per site), so BOTH
+ * import it. report.mjs re-exports the same symbols, so `tests/residual-test.mjs` and any operator
+ * muscle memory keep working.
  *
  * Read-only WITH RESPECT TO DATA: reads state files, folds queues, stats transcripts, and writes
  * no state anywhere. It does emit ONE `hlog` line — the enumeration cap — and that is a
@@ -37,10 +36,10 @@ import { SWEEP_MAX_ENUMERATE } from './config.mjs';
 /**
  * Real sessions only, or the numbers are fiction — and this must be an ALLOW-list, not a deny-list.
  *
- * The first cut denied known test prefixes (`nudge-|queue-|drain-|…`). It rotted immediately: the
- * triage suite landed as `triage-test-0001` and sailed straight into the production stats, exactly
- * as the next suite would have. A deny-list of test names is a promise to remember every future
- * test — the same "rule that asks you to remember" this whole system exists to avoid.
+ * A deny-list of known test prefixes (`nudge-|queue-|drain-|…`) rots immediately: the next suite
+ * (`triage-test-0001`) sails straight into the production stats. A deny-list of test names is a
+ * promise to remember every future test — the same "rule that asks you to remember" this whole
+ * system exists to avoid.
  *
  * Claude Code session ids are UUIDs. Test sids are words. So: match the SHAPE of a real id and
  * everything else is excluded by construction. `hlog` truncates the sid to 8 chars, so accept
@@ -57,11 +56,10 @@ export const isReal = (sid) => REAL_SID.test(String(sid || '').replace(/\.(json|
  * THE BLIND-SPOT LEDGER — every input this pass could not read.
  *
  * A pass that silently skips unreadable inputs produces numbers that LOOK complete and are not:
- * "0 failures" and "I could not read the file that records failures" render identically. This
- * project has already shipped that mistake twice with real consequences — a capture-failure rate
- * that counted its own test, and a "0 memory records" line that was a swallowed HTTP 400. So the
- * skips are counted and reported alongside the results — the discipline that a measurement must be
- * able to return the answer you do not want, and must say when it cannot answer at all.
+ * "0 failures" and "I could not read the file that records failures" render identically. So the
+ * skips are counted and reported alongside the results — the
+ * discipline that a measurement must be able to return the answer you do not want, and must say
+ * when it cannot answer at all.
  */
 export const blindSpots = [];
 export const noteSkip = (what, e) => blindSpots.push(`${what}: ${e?.code || e?.message || 'unreadable'}`);
@@ -196,77 +194,76 @@ export function residualBySession(nowMs, deps = {}) {
    * a state parse + queue fold + full `transcriptLength` on EVERY sweep, forever, because a
    * below-floor residual means `markSwept` never fires so `skipSwept` never excludes it either.
    *
-   * The original framing is the point: *"the sweep's cost is currently bounded by an invariant in a
-   * different file that is one careless line away from inverting, with no backstop underneath it."*
-   * This is the backstop. It does not prevent that regression — it makes it DEGRADE (a bounded scan
-   * and a loud line) instead of COMPOUND (an unbounded one, silently, on the Stop hook).
+   * The framing is the point: the sweep's cost is bounded by an invariant in a different file that
+   * is one careless line away from inverting, and this is the backstop underneath it. It does not
+   * prevent that regression — it makes it DEGRADE (a bounded scan and a loud line) instead of
+   * COMPOUND (an unbounded one, silently, on the Stop hook).
    *
    * AND IT SAYS WHEN IT BITES. A cap that truncates quietly reads as "covered everything", which is
    * the exact failure this subsystem's receipts exist to prevent. Set far above the 56 real sessions
    * measured against, so in normal operation this line never fires.
    */
   /**
-   * FILTER, THEN SORT, THEN SLICE — and the first cut did none of that.
+   * FILTER, THEN SORT, THEN SLICE.
    *
-   * It sliced raw `readdirSync` order before the `isReal` filter, which is wrong twice. Phantom and
-   * test-shaped filenames consumed cap slots that real sessions needed; and `readdirSync` order is
-   * stable, so once the population exceeded the cap the SAME sessions were excluded on every sweep,
-   * forever — a permanent blind spot rather than a bounded one, which is the opposite of what a
-   * degrade-not-compound backstop is for.
+   * Slicing raw `readdirSync` order before the `isReal` filter is wrong twice. Phantom and
+   * test-shaped filenames would consume cap slots that real sessions need; and `readdirSync` order
+   * is stable, so once the population exceeded the cap the SAME sessions would be excluded on
+   * every sweep, forever — a permanent blind spot rather than a bounded one, which is the opposite
+   * of what a degrade-not-compound backstop is for.
    *
    * Sorting by mtime DESCENDING makes the truncation meaningful: if the cap must bite, keep the most
    * recently touched sessions, which are the ones with a live transcript worth flushing.
    *
-   * The TRIGGER below still compares FILE count to the cap, which now counts SESSIONS — deliberately,
+   * The TRIGGER below compares FILE count to the cap, while the cap counts SESSIONS — deliberately,
    * and it is a heuristic rather than a mismatch: it means "this directory is big enough that the
    * budget could conceivably run out, so spend a stat per file to make the order meaningful". Since
-   * the cap now bites on measured sessions, a large directory of phantoms no longer forces a
+   * the cap bites on measured sessions, a large directory of phantoms does not force a
    * truncation — it only pays for a sort that then does not matter, which is the cheap direction to
    * be wrong in.
    */
   /**
-   * ⚠ THE CAP COUNTS MEASURABLE SESSIONS, NOT FILES — and counting files was a real defect that
-   * made this backstop fire permanently while accusing an innocent mechanism.
+   * ⚠ THE CAP COUNTS MEASURABLE SESSIONS, NOT FILES. Counting files would make this backstop fire
+   * permanently while accusing an innocent mechanism.
    *
-   * The cap used to be applied to the file list, HERE, one loop iteration before
-   * `if (!s.transcriptPath) continue` discards a phantom for free. Measured: 4,633 state files, of
-   * which **98.7% were phantoms** — so 1,969 of the 2,000 cap slots
-   * were spent on files the very next line throws away, and only **31 of 61** genuinely measurable
-   * sessions got in. `report.mjs`'s residual was silently missing half its population, and the
-   * sweep's view was truncated for a reason that had nothing to do with the sweep.
+   * Applied to the file list, HERE, one loop iteration before `if (!s.transcriptPath) continue`
+   * discards a phantom for free, the cap is spent on phantoms. Measured: 4,633 state files, of
+   * which **98.7% were phantoms** — 1,969 of the 2,000 cap slots would go to files the very next
+   * line throws away, and only **31 of 61** genuinely measurable sessions would get in.
+   * `report.mjs`'s residual would silently miss half its population, and the sweep's view would be
+   * truncated for a reason that has nothing to do with the sweep.
    *
    * It could never recover, either. The reaper deliberately keeps a phantom for
    * `REAP_PHANTOM_AFTER_MS` (7d) and the machine mints ~368/day, so the steady-state population is
-   * ~2,600 — permanently above a 2,000 file cap. The line fired on every sweep, forever.
+   * ~2,600 — permanently above a 2,000 file cap. The line would fire on every sweep, forever.
    *
-   * AND IT BLAMED THE WRONG THING. Its text read *"the phantom exclusion in stop.mjs is no longer
-   * holding"*. That exclusion was holding perfectly — the phantoms are exactly what it is SUPPOSED
-   * to produce, and because the cap was counted before the exclusion ran, a perfectly-held
-   * invariant could not have prevented this line. It accused the one mechanism it structurally
-   * cannot observe, and prescribed `reap.mjs`, which was already running daily and already deleting
-   * its per-run maximum. A reader who followed both instructions found nothing wrong and learned to
-   * ignore the receipt — on a subsystem whose entire premise is that receipts mean something.
+   * AND IT WOULD BLAME THE WRONG THING. A text like *"the phantom exclusion in stop.mjs is no
+   * longer holding"* accuses the one mechanism the count structurally cannot observe: the
+   * exclusion holds perfectly (phantoms are exactly what it is SUPPOSED to produce), and because
+   * the cap is counted before the exclusion runs, a perfectly-held invariant cannot prevent the
+   * line. A reader who followed its instructions would find nothing wrong and learn to ignore the
+   * receipt — on a subsystem whose entire premise is that receipts mean something.
    *
-   * SO THE CAP NOW BOUNDS WHAT IS ACTUALLY EXPENSIVE. A state parse is ~0.08ms; `transcriptLength`
+   * SO THE CAP BOUNDS WHAT IS ACTUALLY EXPENSIVE. A state parse is ~0.08ms; `transcriptLength`
    * is a full read + per-line `JSON.parse` of a multi-MB JSONL. Charging the cap for parses of
-   * 90-byte phantoms protected the cheap thing and rationed the dear one. Phantoms are now skipped
-   * for free and only MEASURABLE sessions consume the budget — at which point 61 fits inside 2,000
-   * with 97% headroom and the line goes back to meaning what it claims.
+   * 90-byte phantoms would protect the cheap thing and ration the dear one. Phantoms are skipped
+   * for free and only MEASURABLE sessions consume the budget — 61 fit inside 2,000 with 97%
+   * headroom, and the line means what it claims.
    *
-   * The scan is still bounded: the reaper bounds the directory, which is what did not exist
-   * when this cap was written. MEASURED cost of the change on the sweep's own path — with its
-   * `skipSwept`/`minAgeMs` gates, which is how it actually runs — 383ms before, 362ms after: inside
-   * the noise. The cap was rationing something that was never the cost.
+   * The scan is still bounded: the reaper bounds the directory. MEASURED cost on the sweep's own
+   * path — with its `skipSwept`/`minAgeMs` gates, which is how it actually runs — 383ms with the
+   * file-counted cap, 362ms with this one: inside the noise. The cap was rationing something that
+   * was never the cost.
    */
   files = files.filter((f) => isReal(f));
   if (files.length > maxEnumerate) {
     /**
      * An unstatable file sorts FIRST (Infinity), not last, and the skip is RECORDED.
      *
-     * Returning 0 on a failed stat — the first cut — pushed it to the end of a descending sort, so
-     * the very files we could not measure became the first ones the cap excluded: a silent drop of
-     * the population we know least about, which is the opposite of fail-safe. It was also a silent
-     * catch, and `receipt-lint-test.mjs` caught it (`residual.mjs:216 { return 0; }`).
+     * Returning 0 on a failed stat would push it to the end of a descending sort, so the very files
+     * we could not measure would become the first ones the cap excluded: a silent drop of the
+     * population we know least about, which is the opposite of fail-safe. (It would also be a
+     * silent catch, which `receipt-lint-test.mjs` rejects.)
      *
      * Sorting it first means it survives the cap and reaches the loop below, where its unreadable
      * state is routed to `blindSpots` and printed — the module's own receipt channel. A session we
@@ -319,10 +316,9 @@ export function residualBySession(nowMs, deps = {}) {
      * queue, forever, on every sweep. That is the compound-not-degrade shape `SWEEP_MAX_ENUMERATE`
      * was created to prevent, so it is charged here too.
      *
-     * NOT bounded by a file-scan counter, which was the first attempt and was wrong: the list is
-     * sorted mtime-DESCENDING, so a scan cap evicts the OLDEST entries — which are exactly the
-     * idle sessions the sweep exists to flush. That is the defect this cap was just fixed for,
-     * reintroduced one level up. Bound the work, never the walk.
+     * NOT bounded by a file-scan counter: the list is sorted mtime-DESCENDING, so a scan cap
+     * evicts the OLDEST entries — which are exactly the idle sessions the sweep exists to flush.
+     * Bound the work, never the walk.
      */
     if (folded >= maxEnumerate) { capped++; continue; }
     folded++;
@@ -409,9 +405,9 @@ export function residualBySession(nowMs, deps = {}) {
      *
      * `phantoms` counts what this run actually classified — and once the cap binds we stop parsing,
      * so that number becomes an artifact of where we stopped rather than a fact about the
-     * directory. The first draft of this line reported it anyway and read "6 phantoms were skipped
-     * for free" on a directory holding 4,564 of them: a true counter, a false sentence. The
-     * remainder is unclassified, so it is reported as unclassified.
+     * directory. Reporting it anyway would read "6 phantoms were skipped for free" on a directory
+     * holding 4,564 of them: a true counter, a false sentence. The remainder is unclassified, so it
+     * is reported as unclassified.
      */
     hlog('residual', `residual is INCOMPLETE — measured ${measured} session(s), the `
       + `${maxEnumerate}-session cap, and stopped with ${capped} state file(s) unread (a mix of `

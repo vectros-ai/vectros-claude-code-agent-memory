@@ -14,7 +14,7 @@
  * `staged/` write or worker spawn can happen first. An excluded session makes this process exit 0
  * right here and the hook's own code never executes.
  *
- * WHAT THIS DOES NOT PROMISE, because the first draft of this comment did: ES modules evaluate a
+ * WHAT THIS DOES NOT PROMISE: ES modules evaluate a
  * sibling import while an earlier one is still awaiting, so the module-level code of the hook's OTHER
  * imports (reading `credentials.json`) can run before the decision. None of it makes a network call,
  * writes state or spawns anything; `tests/optout-test.mjs` fails if a module-level statement in the

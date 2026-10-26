@@ -3,13 +3,13 @@
  * RED-PROOF: `cli.mjs init` deploys a WORKING runtime — including the OS-keychain native
  * binding, not just the plain .mjs files.
  *
- * FOUND EMPIRICALLY, before any live cutover: `deployRuntime()` originally copied `dist/*.mjs` +
- * `prompts/` and nothing else. Once deployed to the flat runtime dir (no `node_modules` of its
- * own), `creds.mjs`'s `require('@napi-rs/keyring')` always `MODULE_NOT_FOUND`ed — so
- * `CLAUDE_CODE_OAUTH_TOKEN` silently degraded to the plaintext-file tier on EVERY real install,
- * not just platforms lacking a prebuild (the only case that degradation is supposed to cover).
- * `deployKeyring()` fixes this by copying `@napi-rs/keyring` + whichever ONE platform subpackage
- * actually resolved into the deployed runtime's own `node_modules/`.
+ * A `deployRuntime()` that copied `dist/*.mjs` + `prompts/` and nothing else would deploy to the
+ * flat runtime dir (no `node_modules` of its own), where `creds.mjs`'s
+ * `require('@napi-rs/keyring')` would always `MODULE_NOT_FOUND` — so `CLAUDE_CODE_OAUTH_TOKEN`
+ * would silently degrade to the plaintext-file tier on EVERY real install, not just platforms
+ * lacking a prebuild (the only case that degradation is supposed to cover). `deployKeyring()`
+ * prevents this by copying `@napi-rs/keyring` + whichever ONE platform subpackage actually
+ * resolved into the deployed runtime's own `node_modules/`.
  *
  * Runs against SOURCE (`../cli.mjs`), matching every other test in this suite — dev-mode
  * resolution reaches the workspace's hoisted `node_modules` the same way a real install's
@@ -105,7 +105,7 @@ console.log('=== 1. init deploys @napi-rs/keyring alongside the flat runtime, no
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 2. settings.json merge is correct and idempotent — the OTHER half of a safe live cutover.
+// 2. settings.json merge is correct and idempotent — the OTHER half of a safe live install.
 // ─────────────────────────────────────────────────────────────────────────────
 console.log('\n=== 2. settings.json wiring is correct and idempotent ===');
 {
@@ -163,12 +163,11 @@ console.log('\n=== 3. a partially-wired event gains the missing command on re-in
 // named `vectros<ext>` to exist, and `keyring list --json`'s only contract this code reads is
 // the `active` field — so a tiny wrapper is enough, no real keyring involved.
 //
-// FOUND against the REAL CLI: this fake used to accept ANY flags after
-// `keyring list`/`keyring show`, which is exactly how `resolveActiveKeyringAlias()` calling
-// `keyring list --format json` — a flag the real CLI's `keyring list` has never supported, only
-// its sibling `keyring show` does — passed this whole suite while silently finding nothing to pin
-// on every real machine. Fixed here AND in creds.mjs; the fake now checks for the EXACT real flag
-// shape, so a future flag drift fails this test instead of passing it quietly.
+// The fake must check for the EXACT real flag shape after `keyring list`/`keyring show`. A fake that
+// accepts ANY flags is exactly how `resolveActiveKeyringAlias()` calling `keyring list --format
+// json` — a flag the real CLI's `keyring list` does not support, only its sibling `keyring show`
+// does — would pass this whole suite while silently finding nothing to pin on every real machine.
+// Checking the exact shape makes a future flag drift fail this test instead of passing it quietly.
 // ─────────────────────────────────────────────────────────────────────────────
 console.log('\n=== 4. init pins the active keyring identity, once, and never blind-overwrites ===');
 {
@@ -232,7 +231,7 @@ console.log('\n=== 4. init pins the active keyring identity, once, and never bli
     pinnedEnv = env;
   }
 
-  // 4c. THE CORE OF THE FIX: a LATER init run, after the active identity has moved on to
+  // 4c. THE CORE OF THE PIN: a LATER init run, after the active identity has moved on to
   // something else entirely (e.g. an unrelated `bootstrap --tenant test` elsewhere), must NOT
   // silently re-point the pin — that would just relocate the footgun one layer down.
   {

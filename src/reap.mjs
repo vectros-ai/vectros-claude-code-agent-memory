@@ -12,20 +12,20 @@
  * one of those files to compute a tally, and the sweep stats them on a debounced Stop. That is what
  * grows without bound.
  *
- * ── THE CORRECTION THAT SHAPES THE WHOLE DESIGN ─────────────────────────────────────────────────
+ * ── THE FALLBACK CLOCK THAT SHAPES THE WHOLE DESIGN ─────────────────────────────────────────────
  *
- * The original assumption was: *"Desktop spawns ~1-2 empty Stops per minute, each of which creates a state file."*
- * That is not what is happening, and believing it produces a reaper that does nothing.
+ * Most state files are NOT created by a Stop, and assuming they are produces a reaper that does
+ * nothing.
  *
  * MEASURED: 5,450 of the 5,779 files hold EXACTLY `{orientPending, orientSource, orientedAt}` —
  * byte-for-byte what `orient.mjs` writes at SessionStart. `stop.mjs` is the only writer of
  * `lastStopAt`, and only 56 files carry it. So the phantoms are SessionStart-created and NEVER
  * REACHED A STOP; they have no `lastStopAt` and never will.
  *
- * The issue proposes retention keyed on "no `lastStopAt` within N days". Applied literally, that
- * predicate never matches a phantom — the field is absent, not old — so the reaper would protect
- * 94% of the population forever while reporting itself healthy. THE FALLBACK CLOCK IS mtime, which
- * for a file written once at SessionStart is its creation time. That is the difference between a
+ * Retention keyed on "no `lastStopAt` within N days", applied literally, never matches a phantom —
+ * the field is absent, not old — so the reaper would protect 94% of the population forever while
+ * reporting itself healthy. THE FALLBACK CLOCK IS mtime, which for a file written once at
+ * SessionStart is its creation time. That is the difference between a
  * backstop and a no-op with a receipt.
  *
  * ── WHAT IT WILL NOT DO ─────────────────────────────────────────────────────────────────────────
@@ -130,8 +130,7 @@ export function classifyState(f, now, opts = {}) {
    *    why keying on its recency alone would leave 94% of the corpus untouched forever.
    *
    * ⚠ AGE IS THE **NEWER** OF `lastStopAt` AND mtime, AND THAT IS NOT BELT-AND-BRACES — reading
-   * `lastStopAt` alone deleted live sessions — confirmed against the
-   * code.
+   * `lastStopAt` alone would delete live sessions.
    *
    * `lastStopAt` is NOT a liveness clock during a resume. It freezes at the previous session's
    * final turn and stays frozen until the resumed session reaches its own first Stop. Meanwhile
@@ -143,9 +142,9 @@ export function classifyState(f, now, opts = {}) {
    * The loss is not recoverable state — it is `transcriptPath`, which `stop.mjs` is the only writer
    * of and which is the ONLY way the sweep can ever locate that session's tail again.
    *
-   * This is precisely the defect `stop.mjs`'s header documents FIXING for the sweep ("a session
-   * resumed after a day still read as 24h+ idle until its first NON-EMPTY Stop landed"),
-   * reintroduced here — and unlike the sweep, whose mistake costs a wasted scan, this one deletes.
+   * This is precisely the defect `stop.mjs`'s header documents for the sweep ("a session
+   * resumed after a day still read as 24h+ idle until its first NON-EMPTY Stop landed") — and
+   * unlike the sweep, whose mistake costs a wasted scan, this one deletes.
    * mtime is the file's own last write, so max() of the two is the real "when was this last
    * touched by anything".
    */
@@ -484,9 +483,9 @@ export function applyReap(plan, { stateD = stateDir(), queueD = queueDir(), spoo
      * module's own shape advertises — planned against the probe and UNLINKED THE SAME-NAMED FILES
      * OUT OF THE REAL RUNTIME, files it had never classified.
      *
-     * That is verbatim the reader/deleter asymmetry the comment one paragraph up warns about,
-     * reintroduced by the fix for it, in the only function here that deletes. `reap-test.mjs` never
-     * passed either parameter, so the seam had no coverage at all.
+     * That is verbatim the reader/deleter asymmetry the comment one paragraph up warns about, in
+     * the only function here that deletes. Both parameters need test coverage (`reap-test.mjs`
+     * passes them), or the seam has none.
      */
     // A LOOKUP, not a ternary chain. The two-kind ternary silently routed anything that was not
     // `state` into `queueD` — so a third kind would have deleted a spool-named file out of the
@@ -571,10 +570,9 @@ export function reapDue(now = Date.now(), { marker = REAP_MARKER(), debounceMs =
      * of those would silently re-authorise a full ~5,800-file scan or suppress one for a day.
      * Reading the ISO stamp the marker already contained makes the clock a property of the DATA.
      *
-     * It also makes the debounce testable at all: `markReaped` now stamps the CALLER'S clock, so a
-     * test with an injected `now` no longer compares a fake timestamp against a real filesystem
-     * mtime — a real trap (a fake clock racing a real mtime it doesn't control), hit here while
-     * writing the test for this function.
+     * It also makes the debounce testable at all: `markReaped` stamps the CALLER'S clock, so a
+     * test with an injected `now` does not compare a fake timestamp against a real filesystem
+     * mtime — a real trap (a fake clock racing a real mtime it doesn't control).
      */
     const stamped = Date.parse(fs.readFileSync(marker, 'utf8').trim());
     const at = Number.isFinite(stamped) ? stamped : fs.statSync(marker).mtimeMs;
@@ -626,24 +624,16 @@ export function runReap({ now = Date.now(), apply = true, force = false, ...opts
 // inconsistency: an operator running this by hand is inspecting, and the one irreversible action in
 // this tree should not be what happens when you type its name to see what it does.
 //
-// FOUND LIVE, against the real deployed build, not source (verified during a
-// deployment cutover — `run-all.mjs` never catches this, it only ever imports src/ directly): this used to be
-// `import.meta.url === pathToFileURL(process.argv[1]).href`, an `import.meta.url` self-identity
-// check. `capture.mjs` imports `runReap` from this file, and — despite `bundle: false` — the
-// build INLINES this file's entire source into `capture.mjs`'s own dist output (tsup.config.mjs's
-// own "every relative import survives verbatim" comment is wrong; verified by grepping dist/
-// directly, no `import ... from './reap.mjs'` survives, the whole module is copy-pasted in with a
-// `// src/reap.mjs` marker comment). Once inlined, `import.meta.url` for this code IS
-// `capture.mjs`'s own URL, so the check spuriously matched on EVERY real Stop-hook invocation of
-// capture.mjs, not just a real standalone `node reap.mjs` run. `process.argv[1]`'s BASENAME
-// survives inlining correctly — it reflects which script node was actually told to run, which
-// bundling can't change — so that is what real entry-point detection has to compare against here.
+// ENTRY-POINT DETECTION COMPARES THE BASENAME OF `process.argv[1]`, not `import.meta.url`: if a
+// bundler inlines this module into another entry (`capture.mjs` imports `runReap` from here),
+// `import.meta.url` is the host's URL, so an `import.meta.url === pathToFileURL(process.argv[1]).href`
+// self-identity check would match on EVERY host invocation (every real Stop-hook run of
+// capture.mjs), not just a real standalone `node reap.mjs` run. The BASENAME reflects which script
+// node was actually told to run, which bundling can't change.
 //
-// The second bug this crash actually surfaced (independent of the above — real even for a
-// correctly-invoked standalone `reap.mjs`): `runReap()` can return `{skipped: '...'}` with no
-// `.plan` at all (the kill switch is checked before `force`, deliberately — see its own header)
-// and this block unconditionally read `r.plan.prune`, crashing on nothing more exotic than the
-// reaper being disabled. Both fixed together.
+// `runReap()` can also return `{skipped: '...'}` with no `.plan` at all (the kill switch is
+// checked before `force`, deliberately — see its own header), so the block below must not
+// unconditionally read `r.plan.prune`.
 if (process.argv[1] && path.basename(process.argv[1]) === 'reap.mjs') {
   const apply = process.argv.includes('--apply');
   const r = runReap({ apply, force: true });

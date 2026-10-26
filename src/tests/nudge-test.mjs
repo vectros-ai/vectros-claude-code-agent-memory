@@ -161,8 +161,8 @@ console.log('\n=== 6. THE DISPOSAL INSTRUCTIONS (the wrong-`ignored` failure mod
   /**
    * IT MUST FIT AT WORST CASE, NOT AT FIXTURE CASE. This check used `NUDGE_THRESHOLD` candidates
    * titled `t0` with body `b` — about 2.8K of 9500 — so it could not fail no matter how large the
-   * block grew, which is a rule this discipline states directly (a measurement must be able to return the answer you do not
-   * want). Pending is unbounded and routinely 8-12; titles and bodies are model-authored and capped
+   * block grew, which breaks the rule that a measurement must be able
+   * to return the answer you do not want (see `residual.mjs`). Pending is unbounded and routinely 8-12; titles and bodies are model-authored and capped
    * at TITLE_MAX/BODY_MAX, so worst case is those caps, at every slot.
    *
    * The nudge is ALL-OR-NOTHING against recall's budget: a block that outgrows it is not truncated,
@@ -170,11 +170,10 @@ console.log('\n=== 6. THE DISPOSAL INSTRUCTIONS (the wrong-`ignored` failure mod
    * the block must stay bounded as pending grows without limit.
    */
   /**
-   * EVERY model-authored field is hostile in this fixture, including the ones that were NOT capped
-   * when the cap first landed. The previous version pinned `kind:'gotcha', dest:'doc'` — the two
-   * fields that were rendered raw — so it passed by AVOIDING the dangerous input, under a comment
-   * about testing the worst case. MEASURED against the shipped module at the time: 12 candidates
-   * with a 5000-char `kind` rendered 185,777c, and a newline in `kind` escaped its bullet.
+   * EVERY model-authored field is hostile in this fixture. Pinning `kind:'gotcha', dest:'doc'` —
+   * the two fields a regression would render raw — would pass by AVOIDING the dangerous input,
+   * under a comment about testing the worst case. Uncapped, 12 candidates with a 5000-char `kind`
+   * render 185,777c, and a newline in `kind` escapes its bullet.
    */
   const worst = (n) => Array.from({ length: n }, (_, i) => ({
     id: `c${i + 1}`,

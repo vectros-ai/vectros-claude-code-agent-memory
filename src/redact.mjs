@@ -27,12 +27,12 @@
  *
  * QUARANTINE IS NOT DELETION. `queue.mjs`/the JSONL review log already persist every candidate
  * locally BEFORE the network step runs today, regardless of this gate — quarantining only stops
- * the automatic network POST; nothing here deletes anything. ⚠️ IT IS ALSO NOT YET REVIEWABLE:
+ * the automatic network POST; nothing here deletes anything. ⚠️ IT IS ALSO NOT REVIEWABLE:
  * `dispose.mjs` reads the installer's live Vectros store (`bySession()`), and a quarantined
  * candidate never reaches that store — so it does not appear in `dispose.mjs --list` or any other
- * review surface today. The content survives only in this machine's own local files, not in
- * anything a human is expected to read. Closing that gap (surfacing a quarantined candidate
- * somewhere reviewable) is real follow-up work this change does not attempt.
+ * review surface. The content survives only in this machine's own local files, not in anything a
+ * human is expected to read. Surfacing a quarantined candidate somewhere reviewable is not
+ * implemented.
  *
  * A QUARANTINE VERDICT IS TERMINAL, NEVER RE-JUDGED. `gate()`'s return value distinguishes a
  * DEFINITIVE verdict (a deterministic pattern match, or a classifier call that actually completed
@@ -145,9 +145,9 @@ const REDACT_PLACEHOLDER = '[REDACTED]';
  * answer as a secret it can't confidently locate.
  *
  * `fields` ITSELF IS RETURNED UNCHANGED (a shallow copy, not rebuilt field-by-field) when nothing is
- * flagged — an earlier version forced every absent field to `null`, which `propose()` then sent as
- * an explicit `null` in the UPSERT payload where the original code would have left the key out
- * entirely (an absent/`undefined` value is dropped by `JSON.stringify`, a `null` is not). Under
+ * flagged — forcing every absent field to `null` would make `propose()` send an explicit `null` in
+ * the UPSERT payload where the key should be left out entirely (an absent/`undefined` value is
+ * dropped by `JSON.stringify`, a `null` is not). Under
  * merge-patch/upsert semantics a `null` can ERASE a value a previous attempt already stored — the
  * exact hazard `propose()`'s own "OMITTED WHEN ABSENT" comment describes for `area`/`sourceRef`/
  * `dest`/`tags`. Since a flagged (`nonString`) result is never read past the early `quarantined:
@@ -313,15 +313,14 @@ const CLAUDE_BIN =
  * or organization. Security-related content is deliberately NOT a class: a lesson about a
  * vulnerability, an auth flow or a hardening fix is ordinary engineering knowledge and transmits.
  *
- * ⚠️ KNOWN GAP, disclosed rather than silently accepted: this function's PLUMBING (spawn, timeout,
+ * ⚠️ KNOWN GAP: this function's PLUMBING (spawn, timeout,
  * exit-code/`is_error` handling, JSON extraction, fail-closed on any non-clean/unparseable outcome)
  * is fully unit-tested with a fake `spawnImpl` (redact-test.mjs). The classifier's actual JUDGMENT
  * QUALITY — does it correctly tell a real, identifiable customer from a benign name-mention from an
  * idiomatic placeholder ("Jane Doe", "Acme Corp") — is verified only by reading the prompt, never by
- * a real model call. A `redact-real-test.mjs` exercising the three fixture shapes against the real
- * classifier (mirroring this package's existing `drain-real-test.mjs`/`triage-real-test.mjs`
- * convention, gated behind `--all`/`VECTROS_MEM_TEST_ALL=1`) is real follow-up work, explicitly
- * approved to ship without one rather than silently skipped — not fixed here.
+ * a real model call. There is no `redact-real-test.mjs` exercising the three fixture shapes against
+ * the real classifier (as `drain-real-test.mjs`/`triage-real-test.mjs` do, gated behind
+ * `--all`/`VECTROS_MEM_TEST_ALL=1`). That gap was accepted deliberately, not skipped silently.
  *
  * Returns `{ ok: true, verdict }` when the classifier actually RAN and produced a syntactically
  * valid answer (`verdict` is one of `VERDICTS`, or `'uncertain'` for a well-formed-but-unrecognised
@@ -372,6 +371,7 @@ export async function classify(fields, { spawnImpl = _spawnSync } = {}) {
   let res;
   try {
     res = spawnImpl(CLAUDE_BIN, args, {
+      // nosemgrep: javascript.express.security.injection.raw-html-format.raw-html-format -- not HTML: <candidate> is a prompt delimiter in text piped to a model subprocess's stdin, never parsed or rendered as markup; fence() neutralizes a forged delimiter inside the body
       input: `<candidate>\n${fence(body)}\n</candidate>`,
       encoding: 'utf8', timeout: CLASSIFIER_TIMEOUT_MS,
       maxBuffer: 2 * 1024 * 1024, env: childEnv(), windowsHide: true,

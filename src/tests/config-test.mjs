@@ -231,9 +231,9 @@ try {
     eq('named HANDED_TTL_MS export reflects the file at CONFIG_PATH', w.HANDED_TTL_MS, 45 * 60_000);
     if (prev === undefined) delete process.env.VECTROS_MEMORY_CONFIG; else process.env.VECTROS_MEMORY_CONFIG = prev;
     /**
-     * THE RE-EXPORT HOP RUNS IN A CHILD PROCESS, and the first attempt at it here is worth keeping
-     * as a warning: `import('./sweep.mjs?q=1')` returned the DEFAULT, not the configured value, and
-     * that failure was an artifact of the harness rather than a defect in the code.
+     * THE RE-EXPORT HOP RUNS IN A CHILD PROCESS: an in-process `import('./sweep.mjs?q=1')` returns
+     * the DEFAULT, not the configured value, an artifact of the harness rather than a defect in the
+     * code.
      *
      * A query string busts the cache for the module you name — not for what it imports. Fresh
      * `sweep.mjs` still resolved plain `./config.mjs`, which this test file had already evaluated
@@ -382,7 +382,7 @@ try {
         .violations.some((v) => /STALE_SESSION_MS/.test(v.name)));
 
     // The bounds must be READABLE, or none of the above could have been written at all.
-    check('every SPEC rail exposes its own {min,max} (they used to be closed over and unreachable)',
+    check('every SPEC rail exposes its own {min,max} (the bounds are attached to the returned function)',
       Object.values(SPEC).every((sp) => typeof sp.parse.min === 'number' && typeof sp.parse.max === 'number'));
   }
 } finally {

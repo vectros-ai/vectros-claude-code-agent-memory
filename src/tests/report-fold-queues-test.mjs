@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 /**
  * RED-PROOF: `report.mjs`'s `foldQueues()` — specifically the `autoIgnoredCap` tally added
- * alongside the orphan-cap backstop. Report.mjs had NO test coverage at all before this file
- * (a pre-existing gap this doesn't try to close in full — only the new counting logic this branch
- * actually added, which had zero verification of its own).
+ * alongside the orphan-cap backstop. This file covers only that counting logic, not the rest of
+ * report.mjs.
  *
  * Each check below is written so a real regression in the counting logic — double-counting against
  * `ignored`, counting a HUMAN ignore as auto, or missing a real auto-ignore — would fail it, not

@@ -6,8 +6,8 @@
  * costs three separate things:
  *
  *   1. AN ADOPTER CANNOT RELOCATE THE RUNTIME. `~/.claude/vectros-memory` is not a preference here,
- *      it is a fact repeated until it became one. After the build bundles the source, it is a fact
- *      an adopter cannot reach at all — the same argument that makes the config seam a
+ *      it is a fact repeated until it became one. Once the package is built and installed, it is a
+ *      fact an adopter cannot reach at all — the same argument that makes the config seam a
  *      prerequisite rather than a nicety.
  *   2. THE SUITE IS NOT HERMETIC, and this is not theoretical. `tests/orient-boundary-test.mjs`
  *      case 2c asserts "an empty store injects NOTHING"; it fails on this machine because

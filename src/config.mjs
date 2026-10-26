@@ -3,25 +3,22 @@
  *
  * WHY THIS EXISTS. ~42 `const NAME = <literal>` are scattered across 13 hook files; only three
  * (`CLAUDE_CODE_BIN`, `VECTROS_CAPTURE_MODEL`, `VECTROS_RECALL_MODEL`) can be changed without
- * editing source and re-`cp`-ing to the runtime. Two consequences follow: once tsup
- * bundles the hooks for the OSS package a source `const` is unreachable to an adopter, and the two
+ * editing source and re-`cp`-ing to the runtime. Two consequences follow: once the package is
+ * built and installed a source `const` is unreachable to an adopter, and the two
  * numbers that MOST need tuning are guesses (`DELTA_GATE_CHARS` n=1, `NUDGE_THRESHOLD` n=3) that
- * today cost a source edit to move. This module is the seam that fixes both.
+ * would otherwise cost a source edit to move. This module is the seam that fixes both.
  *
- * HOW IT GREW. `CONTEXT_CAP` shipped first and alone — the duplicated one (`recall.mjs` AND
- * `evaluate.mjs` each carried `const CONTEXT_CAP = 9500`, two copies of one number that MUST agree,
- * the 10K `additionalContext` ceiling) — because it was the smallest change that proved the seam
- * end to end: one source of truth, a fail-open loader, config<env precedence, a RED-proven test.
- * The rest of the census then migrated in groups, each with its own test, never in bulk.
+ * A VALUE THAT MUST AGREE LIVES HERE ONCE: `CONTEXT_CAP` is read by `recall.mjs` AND `evaluate.mjs`,
+ * and two copies of one number that MUST agree (the 10K `additionalContext` ceiling) would drift.
  *
- * THE TWO LOWEST MODULES COULD NOT MIGRATE AT ALL until `tunables()` existed. This file imports
+ * THE TWO LOWEST MODULES CAN ONLY READ TUNABLES THROUGH `tunables()`. This file imports
  * `readJsonSafe` and `hlog`, so `atomic.mjs` and `hooklog.mjs` sit in an import CYCLE with it, and
  * a named import of a config value from either would be a temporal-dead-zone `ReferenceError` — on
  * the contended-read path only, i.e. never in testing and only on somebody else's machine. That is
  * what the re-entrancy guard at the bottom of this file is for, and it is proven (both directions)
  * in `tests/config-bootstrap-test.mjs`.
  *
- * THE CONTRACT — and every clause is a lesson this branch already paid for:
+ * THE CONTRACT:
  *   • FAIL-OPEN, and LOUD-vs-QUIET. A hook must NEVER break a turn because config didn't parse.
  *     A config file is read-only (never written back), so every failure resolves to "use the
  *     default" — but the loader must still SAY WHICH, and a MISSING file is quiet (the normal case)
@@ -50,30 +47,24 @@ import { configFile } from './paths.mjs';
 /**
  * Where the config file lives — resolved through `paths.mjs`, which owns every runtime path.
  *
- * It used to spell `path.join(os.homedir(), '.claude', 'vectros-memory', 'config.json')` here, and
- * that was the LAST hardcoded root in the tree: `tests/paths-test.mjs`'s census found it on the
- * first run after the seam landed. It mattered more than the other sixteen — a config path that
- * does not relocate with `VECTROS_MEMORY_HOME` means an isolated test run silently reads the
- * OPERATOR'S live tunables, so every threshold under test is whatever that machine happens to be
- * configured with. `VECTROS_MEMORY_CONFIG` still overrides it directly (see `paths.mjs`).
+ * A hardcoded path here would not relocate with `VECTROS_MEMORY_HOME`, so an isolated test run
+ * would silently read the OPERATOR'S live tunables and every threshold under test would be
+ * whatever that machine happens to be configured with (`tests/paths-test.mjs` censuses for
+ * hardcoded roots). `VECTROS_MEMORY_CONFIG` still overrides it directly (see `paths.mjs`).
  *
  * Snapshotted as a const, unlike the per-call helpers in `paths.mjs`, because the resolution below
  * reads this file exactly ONCE per process by design — the value and the read must agree, and a
  * path that could change between them would be worse than one that cannot.
- *
- * NOTE (surfaced, not settled): the adopter-facing NAME and LOCATION of this file
- * are finalized as part of OSS packaging. `config.json` here is the current default; nothing public
- * consumes it yet, so it is safe to move.
  */
 export const CONFIG_PATH = configFile();
 
 /**
  * A positive integer within [min, max]. Env values arrive as strings; JSON as numbers — both ok.
  *
- * THE BOUNDS ARE ATTACHED TO THE RETURNED FUNCTION, not merely closed over. They used to be
- * captured in the closure and unreachable, which meant NO TEST COULD ASSERT A RELATIONSHIP BETWEEN
- * TWO KNOBS — and this file states three such relationships in prose. A rail nobody can read is a
- * rail nobody can check. → `CONSTRAINTS` below.
+ * THE BOUNDS ARE ATTACHED TO THE RETURNED FUNCTION, not merely closed over. Closed-over bounds
+ * are unreachable, which would mean NO TEST COULD ASSERT A RELATIONSHIP BETWEEN TWO KNOBS — and
+ * this file states such relationships in prose. A rail nobody can read is a rail nobody can
+ * check. → `CONSTRAINTS` below.
  */
 const posInt = (min, max) => {
   const parse = (raw) => {
@@ -183,13 +174,12 @@ export const SPEC = {
 
   /**
    * ── The stale-queue sweep. FOUR tunables, and their provenance is the POINT — including
-   * the one that is still a guess. `HANDED_TTL_MS` joined this block later and carries `n=0`; the
-   * seam's contract is that provenance travels with the default, which means saying "guess" out
-   * loud, not quietly counting it among the measured three.
+   * the one that is still a guess. `HANDED_TTL_MS` carries `n=0`; the seam's contract is that
+   * provenance travels with the default, which means saying "guess" out loud, not quietly counting
+   * it among the measured three.
    *
-   * The first three originally shipped as `n=0 — GUESS`, and said so:
-   * that is WHY a residual-measurement approach landed first. It made residual measurable; these are now set from what it
-   * measured, over 13 real sessions carrying a transcript path:
+   * The first three are set from a residual measurement over 13 real sessions carrying a
+   * transcript path:
    *
    *   total residual at rest ....... 850K chars
    *   orphaned (idle > 24h) ........ 617K across 9 sessions
@@ -203,18 +193,18 @@ export const SPEC = {
     /**
      * FLOOR 4h, AND THE FLOOR IS A SAFETY GATE — not a convenience for tests.
      *
-     * It was 60_000, justified as "so a test can drive it". That was wrong twice. First, no test
-     * needs it: `selectFlushable` and `orphanedPending` both take `staleMs` as a PARAMETER, and the
-     * suite drives it that way — the low floor bought nothing and only widened what an operator
-     * could set. Second, and this is the real cost, `VECTROS_MEM_STALE_SESSION_MS=60000` was an
-     * ACCEPTED value that makes every session idle one minute "done", which (a) spawns billed
-     * distillers against LIVE sessions and (b) hands a live session's pending candidates to another
-     * agent — the double-disposition failure `nudge.mjs` exists to prevent, where a disposition is
-     * final and the second judgement silently loses.
+     * A low floor ("so a test can drive it") would be wrong twice. First, no test needs it:
+     * `selectFlushable` and `orphanedPending` both take `staleMs` as a PARAMETER, and the suite
+     * drives it that way — a low floor buys nothing and only widens what an operator could set.
+     * Second, and this is the real cost, an accepted `VECTROS_MEM_STALE_SESSION_MS=60000` would
+     * make every session idle one minute "done", which (a) spawns billed distillers against LIVE
+     * sessions and (b) hands a live session's pending candidates to another agent — the
+     * double-disposition failure `nudge.mjs` exists to prevent, where a disposition is final and
+     * the second judgement silently loses.
      *
-     * This is `CONTEXT_CAP`'s lesson, six entries up, not applied at authoring time: its bound was
-     * tightened to 9999 precisely because `posInt(1, 10_000)` accepted the one value the bound
-     * existed to exclude. A rail must exclude the dangerous region, not merely bound the type.
+     * This is `CONTEXT_CAP`'s lesson, six entries up: its bound is 9999 precisely because
+     * `posInt(1, 10_000)` would accept the one value the bound exists to exclude. A rail must
+     * exclude the dangerous region, not merely bound the type.
      *
      * 4h still lets an operator shorten the window meaningfully (a machine that genuinely finishes
      * sessions faster) while staying well clear of a lunch break. Ceiling 30 days.
@@ -352,8 +342,7 @@ export const SPEC = {
       + 'duplicate billed distiller. The RAILS CANNOT ENFORCE THAT — 24 x the 180s default is 72 '
       + 'minutes against a 60-minute lock, and tightening the ceiling far enough to make it static '
       + 'would put it below the shipped default. So it is a resolve-time CONSTRAINT with a loud '
-      + 'receipt instead (an earlier version of this note claimed the ceiling handled it; it did '
-      + 'not, and nothing checked).',
+      + 'receipt instead.',
   },
   CAPTURE_CLAUDE_TIMEOUT_MS: {
     def: 180_000,
@@ -576,6 +565,16 @@ export const SPEC = {
     note: 'n=0 — lookup budget for the MEMORY.md projection. Same default as ENUMERATE_TIMEOUT_MS '
       + 'and deliberately NOT the same knob: this one runs detached, so a generous value costs '
       + 'nothing a user can feel.',
+  },
+  PROJECT_GIT_TIMEOUT_MS: {
+    def: 5_000,
+    env: 'VECTROS_MEM_PROJECT_GIT_TIMEOUT_MS',
+    // Ceiling 2 min: the projector runs detached, so nobody waits on it, but a wedged git must still end.
+    parse: posInt(10, 2 * 60_000),
+    note: 'n=0 — how long each git call of the MEMORY.md projection may take (finding the repository root, '
+      + 'listing its working trees). On a machine whose git is slow to start (a saturated CPU, a virus scanner) '
+      + 'a call that outlasts it is treated as "no repository", the projection falls back to discovery, and '
+      + 'with a directory list set that means the index is not written; the receipt says git timed out.',
   },
   PROJECT_HOOK_MAX_CHARS: {
     def: 150,
@@ -841,25 +840,21 @@ export const SPEC = {
   /**
    * ── THE REAPER. `state/` and `queue/` grow without bound and nothing prunes them.
    *
-   * Measured (a re-census, not the original numbers — the earlier
-   * pass found roughly half as many, so this population grows fast):
+   * Measured on one long-running install:
    *
    *   state/ ......... 5,779 files, 0.8 MB, corpus only 15.7 days old  (~368/day)
    *   of which ....... 5,450 hold EXACTLY {orientPending, orientSource, orientedAt}
    *   carry lastStopAt  56
    *   queue/ ......... 58 files, 694 KB — 12 with pending, 46 fully settled
    *
-   * ⚠ THAT 5,450 CORRECTS THE ORIGINAL DIAGNOSIS, AND THE CORRECTION IS THE WHOLE DESIGN. The
-   * original diagnosis was "Desktop spawns ~1-2 empty Stops per minute, each of which creates a
-   * state file." It is not Stop.
-   * `{orientPending, orientSource, orientedAt}` is byte-for-byte what `orient.mjs` writes at
-   * SessionStart, and `stop.mjs` is the ONLY writer of `lastStopAt` — so the phantoms never reached
+   * ⚠ THOSE 5,450 ARE NOT STOP ARTIFACTS, AND THAT IS THE WHOLE DESIGN. They are not created by a
+   * Stop: `{orientPending, orientSource, orientedAt}` is byte-for-byte what `orient.mjs` writes at
+   * SessionStart, and `stop.mjs` is the ONLY writer of `lastStopAt` — so the phantoms never reach
    * a Stop at all. They have no `lastStopAt` and never will.
    *
-   * Which means a retention window keyed on `lastStopAt` recency — exactly what the issue proposes
-   * — would match NOTHING in 94% of the population and the reaper would quietly do almost nothing
-   * while reporting success. The fallback clock is the file's own mtime, and for a phantom that is
-   * its creation time.
+   * Which means a retention window keyed on `lastStopAt` recency would match NOTHING in 94% of the
+   * population and the reaper would quietly do almost nothing while reporting success. The
+   * fallback clock is the file's own mtime, and for a phantom that is its creation time.
    *
    * TWO WINDOWS, because there are two populations with different costs of being wrong. Losing a
    * phantom's state costs nothing (a session that never took a prompt). Losing a REAL session's
@@ -1018,12 +1013,11 @@ export const CONSTRAINTS = [
       + 'Raise LOCK_STALE_MS above the product, or lower the drain.',
   },
   {
-    // The redaction gate's own term in the same budget the entry above checks — added alongside
-    // the gate itself, since a per-candidate classifier call is new cost in the same detached
-    // worker the lock above already has to bound. IMPORTANT: the classifier does NOT run inside
-    // the window loop (an earlier version of this constraint wrongly modeled it that way, against
-    // a since-removed MAX_CANDIDATES_PER_WINDOW cap that didn't bound the real cost and just lost
-    // captures for nothing — see git history if you're wondering where that knob went). It runs
+    // The redaction gate's own term in the same budget the entry above checks — a per-candidate
+    // classifier call is cost in the same detached worker the lock above already has to bound.
+    // IMPORTANT: the classifier does NOT run inside the window loop (modelling it there, as a
+    // per-window candidate cap, would not bound the real cost and would just lose captures for
+    // nothing). It runs
     // once, AFTER the whole window loop, inside `drainAll()`'s flush of owed spool entries — so its
     // real worst case is bounded by how many spool entries one drain will attempt
     // (SPOOL_DRAIN_MAX_SESSIONS x SPOOL_FLUSH_MAX_PER_RUN), each costing up to CLASSIFIER_TIMEOUT_MS
@@ -1479,6 +1473,7 @@ export const THREAD_TOP_N = V.THREAD_TOP_N;
 export const ENUMERATE_BODY_MAX_CHARS = V.ENUMERATE_BODY_MAX_CHARS;
 export const ENUMERATE_TIMEOUT_MS = V.ENUMERATE_TIMEOUT_MS;
 export const PROJECT_TIMEOUT_MS = V.PROJECT_TIMEOUT_MS;
+export const PROJECT_GIT_TIMEOUT_MS = V.PROJECT_GIT_TIMEOUT_MS;
 export const PROJECT_HOOK_MAX_CHARS = V.PROJECT_HOOK_MAX_CHARS;
 export const CANDIDATE_TIMEOUT_MS = V.CANDIDATE_TIMEOUT_MS;
 export const CANDIDATE_PAGE_LIMIT = V.CANDIDATE_PAGE_LIMIT;
@@ -1527,7 +1522,7 @@ export const SWEEP_MAX_ENUMERATE = V.SWEEP_MAX_ENUMERATE;
  * `search()` and recall-eval-worker.mjs's `search()` both do. One function, one constant: a future
  * third caller inherits the bound by calling this, not by remembering to re-derive the number.
  *
- * TWO BOUNDS, not one — the first cut missed this gap. A char-count cap alone
+ * TWO BOUNDS, not one. A char-count cap alone
  * is FALSE ADVERTISING against a BYTE-count server-side threshold: `RECALL_QUERY_MAX_CHARS` chars
  * of CJK/emoji/Cyrillic clamp cleanly by the char rule and can still be 2-4x that many BYTES —
  * MEASURED, a 4000-char all-CJK query produced a 12039-byte body against an 8192-byte request-size
@@ -1539,7 +1534,7 @@ export const SWEEP_MAX_ENUMERATE = V.SWEEP_MAX_ENUMERATE;
  * escaping included, since a body full of newlines/quotes/backslashes inflates on encode — and only
  * pay the codepoint-safe binary search if that second check fails.
  *
- * THREE bounds now, not two. `/v1/search`'s body is deliberately NOT exempt from the
+ * A THIRD BOUND covers content. `/v1/search`'s body is deliberately NOT exempt from the
  * fronting WAF's CRS content-inspection rules (CrossSiteScripting_Body/GenericLFI_Body/
  * GenericRFI_Body/EC2MetaDataSSRF_Body stay in Block mode there — unlike /v1/records and
  * /v1/documents — because /v1/search feeds a real Lucene query_string sink, a genuine past
@@ -1571,15 +1566,13 @@ const QUERY_MAX_BYTES = V.RECALL_QUERY_MAX_BYTES;
  * catches every harness-tag shape actually observed, without eating `<T>`/`<String>`/`x < y`.
  *
  * Strips the tag DELIMITERS only, not the content between them — a plain, minimal transformation
- * that removes the specific shape the WAF has actually been observed flagging. It was originally
- * scoped to this one shape only, "without guessing at the rest of the CRS surface (`../`,
- * IP-literal patterns, etc.) with no observed evidence of tripping this yet" — that evidence has
- * since arrived (path traversal / SSRF literals / SQL comment idioms all independently observed
- * tripping `/v1/search`), so those three now have their own neutralizers below, run in the same
- * pipeline. Whitespace is then collapsed so a removed tag doesn't jam
- * adjacent words together — recall.mjs's own tail already does the same `\s+` -> ' ' normalization
- * separately; collapsing again here is idempotent, not a behavior change for text that never had a
- * tag in it (confirmed by recall-query-cap-test.mjs's existing byte-for-byte assertions).
+ * that removes the specific shape the WAF has actually been observed flagging. It is scoped to this
+ * one shape only; the other observed triggers (path traversal / SSRF literals / SQL comment
+ * idioms) each have their own neutralizer below, run in the same pipeline. Whitespace is then
+ * collapsed so a removed tag doesn't jam adjacent words together — recall.mjs's own tail already
+ * does the same `\s+` -> ' ' normalization separately; collapsing again here is idempotent, not a
+ * behavior change for text that never had a tag in it (confirmed by recall-query-cap-test.mjs's
+ * existing byte-for-byte assertions).
  */
 const HARNESS_TAG_RE = /<\/?[a-z][a-z0-9_-]*(?:\s[^<>]*)?>/g;
 function stripHarnessMarkup(s) {

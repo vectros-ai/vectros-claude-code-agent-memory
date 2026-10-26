@@ -2,9 +2,8 @@
  * Search-hit → injected line. SHARED by recall.mjs (prompt-time recall/orient) and
  * recall-eval-worker.mjs (mid-run recall).
  *
- * It used to live as a byte-for-byte copy in both ("Same reshape as recall.mjs — see its
- * comment"), which is a drift bug waiting to happen: every fix here had to be made twice, and the
- * injection format IS the product. One module, one format.
+ * One module, one format: a byte-for-byte copy in each caller would be a drift bug waiting to
+ * happen (every fix made twice), and the injection format IS the product.
  *
  * ── WHAT AN INJECTED LINE IS FOR ────────────────────────────────────────────────────────
  * The line is not a search result. It is a PITCH: its only job is to make the agent either
@@ -27,8 +26,8 @@
  * off right before the payoff.
  *
  * ── SO: LEAD WITH THE CLAIM ─────────────────────────────────────────────────────────────
- * `metadata.summary` already holds a curated one-line claim — present on every curated doc, and
- * NEVER read until now. It is strictly better than the filename and than the head-chunk prose,
+ * `metadata.summary` already holds a curated one-line claim, present on every curated doc. It is
+ * strictly better than the filename and than the head-chunk prose,
  * per char. Use it; fall back to the title.
  *
  * `metadata.status` rides along at ~8 chars and is load-bearing: a `superseded` doc that surfaces
@@ -44,14 +43,13 @@
  * The authority clause every injection carries. Shared so prompt-time recall, orient, and
  * mid-run recall cannot drift apart.
  *
- * It used to read, flatly: "Treat a hit as authoritative over re-derivation." That is RIGHT for
- * *has this been decided* and WRONG for *does this behave* — and the difference showed up in a
- * real session: recall's own authority clause argued for trusting it over re-derivation, but
- * re-deriving from code there was correct and necessary. The doc said the design was decided; only
- * the code and the tests could say it works.
+ * It must not read, flatly: "Treat a hit as authoritative over re-derivation." That is RIGHT for
+ * *has this been decided* and WRONG for *does this behave*: a doc can say the design was decided,
+ * but only the code and the tests can say it works, so re-deriving from code is sometimes correct
+ * and necessary.
  *
  * Both halves matter. Drop the authority and we are back to recall-as-suggestion, which this rule
- * exists to overrule — a real hit DID correctly outrank re-derivation on a separate, earlier case.
+ * exists to overrule — a real hit can correctly outrank re-derivation.
  * Overstate it and we license trusting a design doc about runtime behavior — the exact mistake the
  * standing rule "verify against the code, not memory" already forbids. Say both.
  */
@@ -88,10 +86,10 @@ const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
  * is precisely how a real hit's actual content got truncated away in production. Drop the echo,
  * keep the rest.
  *
- * Compares NORMALIZED words, not raw prefixes: the first cut compared 24 raw chars and missed
- * this exact case, because the chunk reads `# 0042-some-internal-decision: A Decision Title…`
- * while the claim reads `A Decision Title…` — the numbered-doc prefix alone defeated it.
- * (Verified against live hits; a fixture would have "passed".)
+ * Compares NORMALIZED words, not raw prefixes: comparing 24 raw chars misses the common case,
+ * because the chunk reads `# 0042-some-internal-decision: A Decision Title…`
+ * while the claim reads `A Decision Title…` — the numbered-doc prefix alone defeats a raw-prefix
+ * comparison.
  */
 function dropEchoedTitle(text, claim) {
   const t = text
@@ -118,8 +116,8 @@ function dropEchoedTitle(text, claim) {
  *     title, so NONE is projected. For `memory`, `title` is searchable-not-filterable, which
  *     puts it at the FRONT of `chunkText` (chunk = title + body). The projected keys are exactly
  *     the filterable set: kind · area · priority · status · tags.
- * So for records we must NOT fabricate a title (an earlier cut fell through to `recordType` and
- * labelled every memory "memory"). Emit the real facets + the chunk, which leads with the title.
+ * So for records we must NOT fabricate a title (falling through to `recordType` would label every
+ * memory "memory"). Emit the real facets + the chunk, which leads with the title.
  *
  * NOTE `h.snippet` is ALWAYS null on this API today (verified across every hit shape) — the
  * `h.snippet || h.chunkText` fallback has silently been carrying every call. Kept, in that
@@ -132,9 +130,8 @@ export function reshape(h) {
 
   // metadata.* facets below are schema-defined but store-authored VALUES — a record's kind/area
   // etc. traces back to whatever created it (a candidate's own kind/area, once promoted), so they
-  // are untrusted the same way a search hit's chunk text is. claim/text/passage were already
-  // clean()+cut(); label was not (found during this package's public-readiness pass) — every
-  // facet now goes through clean() before joining, and the assembled label is capped like
+  // are untrusted the same way a search hit's chunk text is. claim/text/passage go through
+  // clean()+cut(), and so does every facet before joining; the assembled label is capped like
   // everything else.
   if (h.sourceType === 'GenericRecord') {
     const facets = [meta.recordType, meta.kind, meta.area, meta.priority ? `p${meta.priority}` : '']
@@ -175,7 +172,7 @@ function toolFor(r) { return r.isRecord ? 'record_get' : 'document_get'; }
  *   doc    : `- [doc · 0042-…, decision, data-model, accepted] <claim> ¦ <why it matched> \`id\` (document_get)`
  * The `¦` separates the curated claim from the matched passage so the reader can tell which is
  * the document's own thesis and which is just the text that happened to rank. The leading
- * `record ·`/`doc ·` marker and the trailing `(record_get)`/`(document_get)` are the fix for the
+ * `record ·`/`doc ·` marker and the trailing `(record_get)`/`(document_get)` resolve the
  * ambiguity above: both the retrieval tool AND the entity kind are stated on the line itself, not
  * implied by which separator the facets happen to use.
  */
@@ -189,12 +186,11 @@ export function renderLine(r) {
 
 /**
  * The compressed re-mention of a hit already shown earlier this session (recall.mjs's
- * dedup-to-pointer path). The actual root cause this fixes: this line used to drop `isRecord`
- * entirely — `[recalled earlier: ${label} · ${id}]` — so a back-referenced document looked
- * identical to a back-referenced record, and by the time a hit reaches this path the reader has
- * no other line to cross-check against (the full render is gone, evicted by dedup). Carry the
- * same kind/tool marker as `renderLine` so the two paths cannot drift apart on the one property
- * that matters.
+ * dedup-to-pointer path). It must not drop `isRecord` — `[recalled earlier: ${label} · ${id}]` —
+ * or a back-referenced document would look identical to a back-referenced record, and by the time
+ * a hit reaches this path the reader has no other line to cross-check against (the full render is
+ * gone, evicted by dedup). Carry the same kind/tool marker as `renderLine` so the two paths cannot
+ * drift apart on the one property that matters.
  */
 export function renderBackRef(r) {
   return `- [recalled earlier: ${kindFor(r)} · ${r.label} · \`${r.id}\` (${toolFor(r)})]`;

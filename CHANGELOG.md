@@ -3,6 +3,46 @@
 All notable changes to `@vectros-ai/claude-code-agent-memory` are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.15.1 — 2026-10-25
+
+Pre-1.0 / beta.
+
+To use this version, update the package and run `claude-code-agent-memory init` again: the hooks run from the deployed
+copy, not from the installed package.
+
+### Added
+
+- **`VECTROS_MEM_PROJECT_GIT_TIMEOUT_MS` sets how long the `MEMORY.md` projection waits for each git call.** The projection
+  asks git for the repository root and for its working trees. The default is 5000 ms and the range is 10 to 120000. A call
+  that outlasts it fails, and with a directory list set the projection then does not write; the receipt names the git call
+  that did not complete.
+- **`claude-code-agent-memory --help` and `--version` print the usage and the package version and exit 0.**
+
+### Fixed
+
+- **A captured memory whose `kind` or `dest` is outside the allowed values is saved instead of being refused and retried.** An
+  unrecognised `kind` is left out and an unrecognised `dest` becomes no suggestion. Memories already waiting in the spool or
+  the queue are saved too.
+- **A write that loses a race with another write to the same record is tried again on the next flush instead of being counted
+  against the memory.** The store answers `409` (`VERSION_CONFLICT`) when another write to the same record committed first.
+  Such a write is no longer charged a retry and no longer stops the rest of the spool, so a record that keeps conflicting is
+  tried on every flush and holds one of that flush's slots. Any other `409` is still counted, and parks the memory after five
+  tries.
+
+### Security
+
+- **A captured memory can no longer close early, with a forged `<candidate>` marker, the block that holds it during the
+  customer-identifier check.** Neutralizing a forged marker also no longer hides the text after it, and runs in linear time.
+
+### Changed
+
+- **The comments in the shipped code describe the code as it is today.** Behaviour is unchanged, except that
+  `report.mjs --compare` says "QUEUE / RECORD AGREEMENT" and counts "queue entries with an id" and "queue entries with no id".
+
+### Documentation
+
+- **The README names `VECTROS_MEM_PROJECT_GIT_TIMEOUT_MS` and says what a git call that outlasts it does.**
+
 ## 0.15.0 — 2026-10-12
 
 Pre-1.0 / beta.

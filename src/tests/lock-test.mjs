@@ -8,13 +8,11 @@
  * that was there was found by READING. Extracting it to `lock.mjs` is what made these five cases
  * expressible; that is the whole reason for the seam.
  *
- * WHAT IT NO LONGER PROTECTS, and read this before valuing any of it. The lock existed because a
- * duplicate worker was DATA LOSS: `nextId(all)` minted candidate ids by folding the queue, so two
- * workers on one snapshot both produced `c1` and the fold's last-write-wins destroyed one. That
- * allocator is GONE — ids are positional, assigned by `queue.mjs`'s fold from the log's own order,
- * so a collision is unrepresentable (→ `queue-test.mjs` § the duplicate-worker race). A duplicate
- * worker now costs SPEND, not candidates. The lock is a cost guard; it is not load-bearing for
- * correctness, and this file should not be read as though it were.
+ * WHAT IT DOES NOT PROTECT, and read this before valuing any of it. A duplicate worker is not DATA
+ * LOSS: ids are positional, assigned by `queue.mjs`'s fold from the log's own order, so two
+ * workers on one snapshot cannot collide on an id (→ `queue-test.mjs` § the duplicate-worker
+ * race). A duplicate worker costs SPEND, not candidates. The lock is a cost guard; it is not
+ * load-bearing for correctness, and this file should not be read as though it were.
  *
  * THE `owned` SPLIT — hygiene, and honest about it. `claimed` answered both "may I spawn?" and "do
  * I hold the lock?"; on a non-EEXIST claim failure it was set true (a deliberate fail-open) and
@@ -77,7 +75,7 @@ check('  ...and the lock is gone', !fs.existsSync(L1));
  * `release` returned true/false, so "not ours, correctly untouched" and "OURS, and the release
  * FAILED" were the same value — and capture.mjs reported the second as "lock left alone (not
  * ours)". A receipt naming the wrong subject, about the one state that means WE wedged capture for
- * 30 minutes. These two lines are the only thing that can tell them apart.
+ * the whole stale-lock window. These two lines are the only thing that can tell them apart.
  */
 eq('an already-gone lock is RELEASED, not failed — absent IS the goal state', release(L1, true, SID), 'released');
 
@@ -86,7 +84,7 @@ eq('an already-gone lock is RELEASED, not failed — absent IS the goal state', 
  * stood here. It is a fact about three hardcoded string literals: it never calls
  * `release`, never imports a thing, and passes if the module is deleted. A tautology wearing a
  * test's clothes — and it was standing in for the ONE state this file never produced, the state
- * `lock.mjs`'s own header calls *"we wedged capture for 30 minutes and nobody knows"*.
+ * `lock.mjs`'s own header calls *"we wedged capture for the whole stale-lock window and nobody knows"*.
  *
  * So produce it. A DIRECTORY at the lock path cannot be `unlink`ed, which is a real `release`
  * failure from the real fs, on a lock we really "own".
@@ -120,7 +118,7 @@ eq("THE STATE NOTHING ELSE PRODUCES: an owned lock we could not free reports 'fa
  * Windows, so the guard's failing half is not hypothetical even though its trigger is.
  * ─────────────────────────────────────────────────────────────────────────────
  */
-console.log('\n=== 4. the platform contract the fix rests on (measured, not assumed) ===');
+console.log('\n=== 4. the platform contract the lock rests on (measured, not assumed) ===');
 
 // 4a — an existing, CLOSED file. `claim()` uses writeFileSync, which opens and closes, so this is
 // the plain case. Nobody disputed it; it is here as the baseline the other two are read against.
@@ -130,7 +128,7 @@ let codeVsFile = null;
 try { fs.writeFileSync(L4, 'other', { flag: 'wx' }); } catch (e) { codeVsFile = e.code; }
 eq('wx against an existing CLOSED file raises EEXIST', codeVsFile, 'EEXIST');
 
-// 4b — a DIRECTORY. This is what the first draft used to "induce" a non-EEXIST failure. It doesn't.
+// 4b — a DIRECTORY. It cannot "induce" a non-EEXIST failure.
 const L4d = lockAt('contractDir');
 fs.mkdirSync(L4d, { recursive: true });
 let codeVsDir = null;

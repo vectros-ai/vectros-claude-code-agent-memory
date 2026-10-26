@@ -10,33 +10,27 @@
  * candidates as JSON, and this worker appends them to the per-session QUEUE (queue.mjs). The agent
  * settles each candidate via `dispose.mjs`, which verifies every claim.
  *
- * THIS WORKER NOW WRITES TO THE STORE — and the sentence it replaces ("it writes nothing to the
- * store and holds no credential that could") was the load-bearing claim, so read what actually
- * changed. It dual-writes each proposal to the SPOOL, and the drain at the end of `main` promotes
- * spooled proposals to `candidate` records (cutover Phase A of a broader rollout).
+ * THIS WORKER ALSO WRITES TO THE STORE, but only into a staging type. It writes each proposal to
+ * the queue AND to the SPOOL (a local write-ahead log of owed record writes), and the drain at the
+ * end of `main` promotes spooled proposals to `candidate` records.
  *
- * What has NOT changed is the property that sentence was protecting. A `candidate` is store-only
- * (`indexMode: NONE`): never indexed, unreachable by search or a grounded answer under any query,
- * so an unverified claim still cannot be recalled as fact. The distiller's output reaches a
- * STAGING type and nothing else; promotion to `memory` remains the agent's act, after
- * verification, through `dispose.mjs`. The air gap moved from "no write path exists" to "the write
- * path lands somewhere search cannot see" — enforced by the platform rather than by this file
- * having no credential. Do not relax that to a searchable type. → the § below on why Option A died.
+ * A `candidate` is store-only (`indexMode: NONE`): never indexed, unreachable by search or a
+ * grounded answer under any query, so an unverified claim cannot be recalled as fact. The
+ * distiller's output reaches a STAGING type and nothing else; promotion to `memory` is the agent's
+ * act, after verification, through `dispose.mjs`. The air gap is "the write path lands somewhere
+ * search cannot see" — enforced by the platform rather than by this file having no credential. Do
+ * not relax that to a searchable type. → the § below on why a direct-write distiller is rejected.
  *
- * THE "OPTION A" LIVE-WRITE PLAN IS DEAD — do not rebuild it. This header used to say the
- * dry-run was a soak to be "flipped to live writes", and pointed at a follow-on that would give
- * this sub-call the vectros MCP tools and let it reconcile + `record_create` autonomously. The
- * soak ran and killed it: its premise was "a private memory write is reversible, therefore
- * low-stakes", and reversible is not harmless when recall serves the thing back marked
- * AUTHORITATIVE and nobody knows to fire the undo. A dry-run proposed a FABRICATED statistic as
- * durable fact; the day the replacement shipped, a candidate carried a FABRICATED sourceRef URL.
- * An agent caught both. A direct-write distiller would have stored them.
+ * DO NOT GIVE THE DISTILLER A DIRECT-WRITE PATH (the vectros MCP tools, an autonomous
+ * `record_create`). The premise — "a private memory write is reversible, therefore low-stakes" —
+ * is wrong: reversible is not harmless when recall serves the thing back marked AUTHORITATIVE and
+ * nobody knows to fire the undo. The distiller has proposed a FABRICATED statistic as durable fact
+ * and a candidate carrying a FABRICATED sourceRef URL; an agent caught both. A direct-write
+ * distiller would have stored them.
  *
- * `VECTROS_CAPTURE_LIVE` is retained ONLY as a log label and is not a switch to anything. It
- * previously claimed live "is treated as dry-run with a warning in the log" — the opposite of
- * what the code does (it stamps `mode: 'LIVE (agent-validated)'` into the review log while
- * behaviour is unchanged: a lie in the log, not a warning). Nothing reads it to gate a write,
- * because there is no write path here to gate.
+ * `VECTROS_CAPTURE_LIVE` is a log label ONLY, not a switch to anything: it changes the `mode`
+ * string stamped into the review log while behaviour is unchanged. Nothing reads it to gate a
+ * write, because the distiller has no direct write path to gate.
  *
  * Reuses recall-eval-worker's auth pattern (childEnv): re-entrance guard + subscription
  * token, host-managed session vars stripped. argv: <sessionId> <transcriptPath>
@@ -58,8 +52,8 @@ import { CAPTURE_CLAUDE_TIMEOUT_MS, DELTA_MAX_CHARS, MAX_WINDOWS_PER_RUN, NUDGE_
 // Same untrusted-field rule as nudge.mjs/dispose.mjs — a prior candidate's title/kind is
 // model-authored with no length bound of its own. `fence()` (transcript.mjs) already strips the
 // delimiter tags that would let one break OUT of the <pending_candidates> block, so this isn't a
-// prompt-injection gap; it's the same consistency/budget gap an OSS-readiness pass found
-// everywhere else a candidate field renders (hit.mjs, nudge.mjs, dispose.mjs).
+// prompt-injection gap; it's the same consistency/budget bound applied everywhere else a
+// candidate field renders (hit.mjs, nudge.mjs, dispose.mjs).
 const field = (v, max) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -81,38 +75,25 @@ const CLAUDE_BIN =
 /**
  * The window is the DELTA since the last capture — not a tail.
  *
- * It was `TRANSCRIPT_TAIL_CHARS = 12_000` + `TRANSCRIPT_TAIL_MSGS = 60`: a keyhole onto the most
- * recent turns, re-opened every 90 seconds. Measured consequences on one real session:
- *   - the 60-MSG cap bound before the char cap, so raising the tail did nothing: union coverage
- *     went 12% -> 17% as TAIL_CHARS went 12K -> 120K. The keyhole could not be widened.
- *   - the median run's delta was 5.5K against a 12K window, so most of each read was text it had
- *     already proposed on. That is where the near-duplicates came from.
+ * A fixed tail (the most recent N chars / M messages, re-read at every capture) is a keyhole onto
+ * the latest turns: a message cap binds before the char cap, so raising the tail cannot widen it,
+ * and most of each read is text already proposed on, which is where near-duplicates come from.
  *
  * Reading `[fromOffset, to)` instead means every character is distilled exactly ONCE per session:
  * linear cost, 100% coverage, no exceptions.
  *
  * THE CAP IS A WINDOW, NOT A CLIFF. A cap is unavoidable — Haiku's context is
  * ~200K tokens and 400K chars is ~100K of them, about half, leaving room for the system prompt, the
- * priors block and the output. The BUG was what happened when it bound: the window kept the most
- * recent 400K and the worker then marked the WHOLE delta captured, so the head fell below the
- * watermark unread and was gone for good.
+ * priors block and the output. The danger is what happens when it binds: if the window kept the
+ * most recent 400K and the worker then marked the WHOLE delta captured, the head would fall below
+ * the watermark unread and be gone for good. A failed distill also correctly HOLDS the watermark,
+ * so the delta grows and the next success would drop everything past the cap.
  *
- * MEASURED before the fix: 3,019K of 4,219K (72%) of live arc dropped. Three sessions, all of them
- * — the queue went live mid-session and met an already-long transcript at offset 0. And it was NOT
- * only an adoption artifact: a failed distill correctly HOLDS the watermark, so the delta grows and
- * the next success drops everything past the cap (one session failed at 0K, succeeded at 1391K,
- * skipped 991K). The retry logic that is right in isolation was feeding the hole.
- *
- * Now: slice FORWARD from the watermark, mark exactly `to` captured, and LOOP until drained. The
+ * So: slice FORWARD from the watermark, mark exactly `to` captured, and LOOP until drained. The
  * watermark can never pass unread text, so "everything below this is distilled" is true by
- * construction and there is no hole to name. Chunks are chronological, and each chunk's candidates
- * become the next chunk's priors — so a later chunk REVISEs an earlier chunk's wrong claim exactly
- * as a later run revises an earlier one. Draining 1983K costs ~5 Haiku calls ONCE.
- *
- * (The cost figure here read "~$0.14" and was NOTIONAL stated as measured. 1983K
- * chars is ~496K input tokens, so ~$0.50 at Haiku list, and the distiller runs on the
- * SUBSCRIPTION token, so the marginal dollar cost is neither number. The call COUNT is what the
- * argument rests on and it holds.)
+ * construction. Chunks are chronological, and each chunk's candidates become the next chunk's
+ * priors — so a later chunk REVISEs an earlier chunk's wrong claim exactly as a later run revises
+ * an earlier one. Draining 1983K costs ~5 Haiku calls ONCE.
  */
 
 /**
@@ -128,8 +109,8 @@ const CLAUDE_BIN =
  * Render the PENDING candidates this session has already proposed.
  *
  * This is the mechanism that lets a later run correct an earlier one. Without it, every run is
- * amnesiac: it re-meets the same material and proposes a fresh variation, which is how the
- * dry-run produced 349 proposals across 7 sessions with near-duplicates and no self-correction.
+ * amnesiac: it re-meets the same material and proposes a fresh variation, producing
+ * near-duplicates and no self-correction.
  *
  * Concretely: a run once proposed a FABRICATED statistic ("~9/min") as durable fact
  * hours before the session retracted it. A later run reading the retraction in its delta
@@ -159,11 +140,10 @@ function distill(deltaText, pendingBlock) {
     '--system-prompt', sys,
     '--output-format', 'json',
     '--strict-mcp-config',
-    // NO MCP, deliberately and permanently. The distiller PROPOSES; the AGENT commits.
-    // The old plan was to give this sub-call the vectros tools
-    // so it could reconcile and write itself — that plan is dead, and with it the 135K-context
-    // runaway it required (MCP tools force --max-turns > 1, which is what let this call continue
-    // the transcript's work instead of distilling it). Keep it tool-less and single-turn.
+    // NO MCP, deliberately and permanently. The distiller PROPOSES; the AGENT commits. Giving this
+    // sub-call the vectros tools so it could reconcile and write itself would also force
+    // --max-turns > 1, which lets the call continue the transcript's work instead of distilling
+    // it (a 135K-context runaway). Keep it tool-less and single-turn.
     '--mcp-config', '{"mcpServers":{}}',
     '--no-session-persistence',
     // Disallow every built-in by name — see recall-eval-worker for the measured breakdown
@@ -211,14 +191,13 @@ function runWindow(sessionId, transcriptPath, fromOffset) {
   const q = readQueue(sessionId);
   /**
    * HONOUR the corrupt receipt. `queue.read()` reports `state: 'corrupt'` when it cannot read the
-   * queue — and this ignored it. An unreadable queue folds to an EMPTY `all`, so `nextId` mints
-   * `c1` again and the fold's last-write-wins destroys the original candidate; the priors block
-   * also goes empty, so the distiller re-proposes what it already proposed. queue.mjs added the
-   * receipt and capture.mjs honours it; this caller — the one that WRITES — did not. Second of the
-   * four mechanisms wired only where its bug was found.
+   * queue. Acting on an unreadable queue would read the watermark as 0 and the priors block as
+   * empty, so the whole arc is re-distilled and every already-settled candidate is re-proposed
+   * (see the `read()` catch comment in queue.mjs). Every caller of `read` that WRITES must refuse
+   * on this state.
    */
   if (q.state === 'corrupt') {
-    hlog('capture-worker', 'queue read CORRUPT — refusing to distil (an empty fold would re-mint ids and destroy candidates)', sessionId);
+    hlog('capture-worker', 'queue read CORRUPT — refusing to distil (an empty fold would rewind the watermark to 0 and re-propose settled candidates)', sessionId);
     return null;
   }
   const { text, total, to, remaining, messages } = sliceSince(transcriptPath, fromOffset, DELTA_MAX_CHARS);
@@ -228,13 +207,13 @@ function runWindow(sessionId, transcriptPath, fromOffset) {
   if (!decision || decision.error) {
     // Do NOT advance the watermark on a failed window — that would skip this stretch of transcript
     // forever, silently. A failed capture must be retried, not swallowed. Stop the drain here too:
-    // marking a LATER window captured would jump the watermark over this failed one, which is the
-    // 72% hole wearing a different hat.
+    // marking a LATER window captured would jump the watermark over this failed one, leaving a
+    // hole of unread transcript behind the watermark.
     //
     // stderr is collected into `decision` on a claude -p exit failure (see `distill`'s res.status
     // branch) and this early return is the ONLY place a failed window is reported — the JSONL
     // review log below is never reached on this path. Without it here, the one field that would
-    // explain WHY the child failed (auth expired, binary missing, OOM) was gathered and discarded.
+    // explain WHY the child failed (auth expired, binary missing, OOM) would be gathered and discarded.
     hlog('capture-worker', `distill FAILED (${decision?.error || 'no decision'})`
       + (decision?.stderr ? ` stderr="${decision.stderr.slice(0, 200)}"` : '')
       + ` — watermark HELD at ${Math.round(fromOffset / 1000)}K, drain stopped`, sessionId);
@@ -246,16 +225,16 @@ function runWindow(sessionId, transcriptPath, fromOffset) {
   let nNew = 0, nRev = 0, nSpooled = 0;
   // Array.isArray, not `|| []` — guards SHAPE, not just null/undefined. `|| []` still iterates a
   // string or object the model returned in place of an array; recall-eval-worker.mjs's sibling
-  // fields (`decision.keep`) already guard this way, this one didn't.
+  // fields (`decision.keep`) guard this way too.
   //
-  // NOT capped here. An earlier version of this loop truncated to a fixed per-window count on the
-  // theory that each capture now costs a second local model call (the redaction gate's classifier,
-  // -> redact.mjs) — wrong: the classifier runs later, once per OWED SPOOL ENTRY inside
-  // `drainAll()`'s flush below, never inside this loop. A per-window cap here bounded nothing real
-  // and permanently dropped captures (this function has no per-capture watermark, so a dropped
-  // capture's source text is never retried) for no corresponding safety benefit. The real budget on
-  // the classifier's added cost lives in config.mjs's CONSTRAINTS check against
-  // SPOOL_DRAIN_MAX_SESSIONS x SPOOL_FLUSH_MAX_PER_RUN, where the calls actually happen.
+  // NOT capped here. A fixed per-window count would be justified only if each capture cost a second
+  // local model call (the redaction gate's classifier, -> redact.mjs), but the classifier runs
+  // later, once per OWED SPOOL ENTRY inside `drainAll()`'s flush below, never inside this loop. A
+  // per-window cap here would bound nothing real and permanently drop captures (this function has
+  // no per-capture watermark, so a dropped capture's source text is never retried) for no
+  // corresponding safety benefit. The real budget on the classifier's added cost lives in
+  // config.mjs's CONSTRAINTS check against SPOOL_DRAIN_MAX_SESSIONS x SPOOL_FLUSH_MAX_PER_RUN,
+  // where the calls actually happen.
   const captures = Array.isArray(decision.captures) ? decision.captures : [];
   for (const c of captures) {
     /**
@@ -265,60 +244,56 @@ function runWindow(sessionId, transcriptPath, fromOffset) {
      * same externalId, so an ambiguous timeout upserts the same row instead of creating a second
      * one. (2) It is what makes the two stores COMPARABLE — the queue event and the record carry
      * the same id, so "do these agree?" is a set difference rather than a fuzzy title match. That
-     * is the check Phase A exists to run.
+     * is the check `report.mjs --compare` runs.
      *
      * A uuid, not a count. The queue's ordinal ids (`c1`…`cN`) are derived by the FOLD precisely
-     * because two concurrent workers both computed `c1` and one candidate was silently destroyed;
+     * because two concurrent workers both computing `c1` would silently destroy one candidate;
      * minting a record key from any count would rebuild that race on the other side. Nothing here
      * reads existing state to choose it. → queue.mjs § the propose/revise arm.
      *
-     * NO `id` FIELD, either — the worker does not name candidates any more; `queue.mjs`'s fold
-     * does, by position. This loop used to call `nextId(all)`, a read-modify-write over that very
-     * fold, which is where the collision above actually happened. The id an unsynchronized writer
-     * allocates is not a fact, so it is not written.
+     * NO `id` FIELD, either — the worker does not name candidates; `queue.mjs`'s fold does, by
+     * position. A count-derived allocation over that fold is where the collision above would
+     * happen. The id an unsynchronized writer allocates is not a fact, so it
+     * is not written.
      *
-     * The shape of both writes lives in `capture-map.mjs` — pure, so it is testable, and shared
-     * with the later backfill that must produce identical records from the historical queue files.
+     * The shape of both writes lives in `capture-map.mjs` — pure, so it is testable.
      */
     const { isRevise, ev, candidate, digest } = mapCapture(c, {
       sessionId, all, offset: to,
       uuid: randomUUID(),
       proposedAt: new Date().toISOString().slice(0, 10),
-      // WHICH PATH PROPOSED THIS. The schema has carried `origin: session|recovered` from the
-      // start and nothing ever wrote the second value, so the distinction it exists for — a live
-      // session's own proposal vs one recovered from a session that ended without settling — was
-      // simply absent from every record. The sweep passes `--recovered`; a live Stop does not.
+      // WHICH PATH PROPOSED THIS: `origin: session|recovered` — a live session's own proposal vs
+      // one recovered from a session that ended without settling. The sweep passes `--recovered`;
+      // a live Stop does not.
       origin: RECOVERED ? 'recovered' : 'session',
     });
     /**
-     * CHECK THE APPEND. It was discarded, and then `markCaptured(to)` ran regardless — so on any
-     * append failure (ENOSPC, EACCES, a locked queue) the candidate vanished AND its source text
-     * was marked distilled forever. That is the 72% watermark hole, one candidate wide, in the
-     * file that implements the fix for it. `dispose.mjs` checks this same return; the worker did
-     * not.
+     * CHECK THE APPEND. If the result were discarded, `markCaptured(to)` would still run, so on any
+     * append failure (ENOSPC, EACCES, a locked queue) the candidate would vanish AND its source
+     * text be marked distilled forever: a watermark hole, one candidate wide. `dispose.mjs` checks
+     * this same return.
      */
     if (!append(sessionId, ev)) {
       hlog('capture-worker', `APPEND FAILED for "${String(c.title || '(untitled)').slice(0, 60)}" — abandoning this window WITHOUT advancing the watermark (it will be retried)`, sessionId);
       return null;
     }
     /**
-     * DUAL-WRITE (cutover Phase A). The queue append above is still AUTHORITATIVE — every reader
-     * reads it, and this branch changes no behaviour. The spool is a shadow copy that the flush
-     * below promotes into a `candidate` record, so the corpus fills with real proposals for days
-     * before anything depends on it.
+     * DUAL-WRITE. The queue append above is the worker's own authoritative record of the session
+     * (the watermark, and the priors a later REVISE cites). The spool is a write-ahead copy that
+     * the flush below promotes into a `candidate` record, and `report.mjs --compare` checks that
+     * the two stores agree.
      *
      * ORDER IS QUEUE-FIRST, and it is not arbitrary. A failed queue append abandons the window
      * without advancing the watermark, so the text is re-distilled later; anything spooled before
-     * that point would have become a record with no queue entry behind it — a divergence in the
+     * that point would become a record with no queue entry behind it — a divergence in the
      * direction the agreement check reads as "the record store invented a candidate". Spooling
-     * only after the authoritative write means the shadow can lag, never lead.
+     * only after the queue write means the spool can lag, never lead.
      *
-     * A SPOOL FAILURE DOES NOT ABANDON THE WINDOW. In Phase A the claim is already durable in the
-     * queue, so failing the window here would make dual-write strictly riskier than not
-     * dual-writing — the opposite of "rollback is deleting one call". It is counted instead, and
-     * the count rides the window log line so a silent divergence shows up where someone reads.
-     * (`spool.mjs`'s own APPEND FAILED line says the proposal "will be lost"; that becomes true at
-     * Phase B, when reads flip and the queue stops being the backstop. It is early, not wrong.)
+     * A SPOOL FAILURE DOES NOT ABANDON THE WINDOW. The claim is already durable in the queue, so
+     * failing the window here would make dual-writing strictly riskier than not dual-writing. It
+     * is counted instead, and the count rides the window log line so a silent divergence shows up
+     * where someone reads. (`spool.mjs`'s own APPEND FAILED line says the proposal "will be
+     * lost": true of the record write, not of the queue entry that exists here.)
      *
      * (The `proposedAt` stamp and the ordinal→externalId translation of `revises` both live in
      * `capture-map.mjs`, with the reasoning for each.)
@@ -326,13 +301,13 @@ function runWindow(sessionId, transcriptPath, fromOffset) {
     ev.digest = digest;   // the content fingerprint --compare verifies the round trip against
     if (spool(sessionId, ev.externalId, candidate)) nSpooled++;
     /**
-     * THE REVERSE HALF OF A CORRECTION, and nothing wrote it before.
+     * THE REVERSE HALF OF A CORRECTION needs its own write.
      *
      * `candidate.revises` points the NEW record at the one it corrects. `pending()` retires the OLD
-     * one by reading `supersededBy` — a field no production path ever set. The queue fold retired a
-     * corrected claim; the corpus did not. Left alone, Phase B would have re-offered every
-     * candidate ever revised, and `--compare` could not have warned anyone: both stores hold the
-     * same externalIds, which is all it compares.
+     * one by reading `supersededBy`, which this write sets. The queue fold retires a corrected
+     * claim on its own; the corpus does not. Left alone, every revised candidate would be
+     * re-offered by the nudge, which reads records, and `--compare` would not warn anyone: both
+     * stores hold the same externalIds and the same claim content.
      *
      * Spooled, not written inline, so it survives the provisioning gap on the same terms as the
      * proposal that triggered it.
@@ -374,16 +349,12 @@ function runWindow(sessionId, transcriptPath, fromOffset) {
 /**
  * Release the in-flight lock `capture.mjs` took before spawning us.
  *
- * IT WAS NEVER RELEASED (both
- * locks still on disk ~50 min after their drains had logged "fully drained"). This file contained
- * no `lock` reference at all; the only `unlinkSync` was capture.mjs's 30-minute stale path.
- *
- * The consequence is worse than a leaked file: it silently turned the CONTENT gate into
- * "content AND a 30-minute timer" — reintroducing, 20x larger, the `DEBOUNCE_MS = 90_000` that
- * capture.mjs's own header celebrates removing as "uncorrelated with what the session produced",
- * and widening the never-distilled tail by roughly 6x. `LOCK_STALE_MS`'s comment ("a lock older
- * than this is treated as DEAD") only makes sense for a lock that is normally released; it read as
- * a backstop and was in fact the only path.
+ * THE WORKER MUST RELEASE IT: capture.mjs's stale-lock path (60 minutes by default) is only a
+ * backstop. A lock that nobody releases is worse than a leaked file: it silently turns the CONTENT
+ * gate into "content AND an hour-long timer" — reintroducing, 40x larger, the `DEBOUNCE_MS = 90_000`
+ * that capture.mjs's own header celebrates removing as "uncorrelated with what the session
+ * produced". `lock.mjs`'s `STALE_MS` comment ("a worker lock older
+ * than this is treated as dead") only makes sense for a lock that is normally released.
  *
  * Derived, not passed: one definition of the path would be better, but the worker must not import
  * capture.mjs (it is a hook with a top-level re-entrance `process.exit`). Keep the two in step.
@@ -407,13 +378,13 @@ async function main() {
   // Termination is `runWindow`'s job alone — it returns null once there is nothing left to read.
   // Do NOT add a lookahead like `sliceSince(offset).remaining === 0` to decide whether to continue:
   // `remaining` is measured AFTER the window it describes, so on the FINAL window it is 0 and the
-  // loop breaks before distilling it. MEASURED: that dropped the last 37K of a 1234K transcript —
-  // the tail, where the conclusions are. The watermark held honestly (so the next Stop recovered
-  // it), but a session ending there would have lost that text: the same "silently skip the arc"
-  // failure this whole change exists to remove, one window wide.
+  // loop breaks before distilling it. That drops the tail (e.g. the last 37K of a 1234K
+  // transcript), where the conclusions are. The watermark holds honestly (so the next Stop
+  // recovers it), but a session ending there would lose that text: a "silently skip the arc"
+  // failure, one window wide.
   let windows = 0;
   // `finally`, not a tail call: the lock must drop on a throw too, or one crash wedges capture for
-  // this session for 30 minutes with no diagnostic.
+  // this session for the whole stale-lock window (60 minutes by default) with no diagnostic.
   try {
     for (; windows < MAX_WINDOWS_PER_RUN; windows++) {
       const to = runWindow(sessionId, transcriptPath, offset);
@@ -426,7 +397,7 @@ async function main() {
         + 'resumes from the watermark next Stop; nothing skipped', sessionId);
     }
     /**
-     * PROMOTE the spooled proposals to records (cutover Phase A).
+     * PROMOTE the spooled proposals to records.
      *
      * UNCONDITIONAL — outside the window loop and not gated on this run having produced anything.
      * A run that distils nothing is exactly when a BACKLOG is most likely to be waiting: the
@@ -445,7 +416,7 @@ async function main() {
     if (tot('attempted')) {
       hlog('capture-worker',
         `spool drain: ${tot('synced')} synced, ${tot('failed')} failed, ${tot('quarantined')} quarantined `
-        + `(redaction gate), ${tot('deferred')} deferred, ${tot('parked')} parked across `
+        + `(redaction gate), ${tot('conflicted')} conflicted, ${tot('deferred')} deferred, ${tot('parked')} parked across `
         + `${receipts.length} session(s)`, sessionId);
     }
   } finally {
@@ -455,8 +426,8 @@ async function main() {
 
 // A crash receipt, not just fail-open — this worker is spawned `detached, stdio: 'ignore'`
 // (capture.mjs), so an uncaught throw here has NO other way to reach a human. Every sibling
-// hook/worker in this directory has this guard; this was the one exception (found during an
-// OSS-readiness pass — a silent death here was invisible by construction).
+// hook/worker in this directory has this guard; a silent death here would be invisible by
+// construction.
 main().catch((e) => {
   try { hlog('capture-worker', `hook CRASHED (${e?.code || e?.name || 'error'}) — this invocation did NOTHING: ${e?.message || e}`); }
   catch { /* silence-ok: the log IS the last resort; if it throws too there is nowhere left to report, and breaking further over a logging failure would be worse than the silence. */ }

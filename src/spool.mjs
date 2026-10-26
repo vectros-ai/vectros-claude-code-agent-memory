@@ -239,6 +239,7 @@ export async function flush(sessionId, opts = {}) {
   let synced = 0;
   let failed = 0;
   let quarantined = 0;
+  let conflicted = 0;
   let halted = null;
   for (const item of batch) {
     /**
@@ -330,6 +331,14 @@ export async function flush(sessionId, opts = {}) {
       quarantined++;
       continue;
     }
+    if (fail.reason === 'conflict') {
+      // `conflict` (409 VERSION_CONFLICT): another write won the race for THIS record. Nothing was written
+      // and the same bytes succeed on a later attempt. Not charged, and not an environment failure, so the
+      // batch goes on. The retry is deliberately unbounded: a record that keeps conflicting stays at the head
+      // of `owed` and holds one of the per-run slots on every flush.
+      conflicted++;
+      continue;
+    }
     if (CHARGEABLE.has(fail.reason)) {
       // The reason is RECORDED, not a constant — a parked entry's only evidence is this line, and
       // "propose returned null" told a later reader nothing about why it could not land.
@@ -340,17 +349,18 @@ export async function flush(sessionId, opts = {}) {
     halted = fail.reason || 'unknown';
     break;
   }
-  if (synced || failed || quarantined || halted) {
-    hlog('spool', `flush: ${synced} synced, ${failed} failed, ${quarantined} quarantined, `
+  if (synced || failed || quarantined || conflicted || halted) {
+    hlog('spool', `flush: ${synced} synced, ${failed} failed, ${quarantined} quarantined, ${conflicted} conflicted, `
       + `${s.owed.length - batch.length} deferred, ${s.parked.length} parked`
       + (halted ? ` — HALTED on '${halted}': an environment failure, so the rest stay owed and spend no budget` : ''), sessionId);
   }
   return {
     // `attempted` is what was actually tried, not the batch size — a halt leaves the remainder
     // untouched, and reporting them as attempted would overstate what this run observed.
-    attempted: synced + failed + quarantined, synced, failed, quarantined,
+    // The early-return receipts above (off, paused, corrupt, empty) carry no `conflicted`; readers sum with `|| 0`.
+    attempted: synced + failed + quarantined + conflicted, synced, failed, quarantined, conflicted,
     parked: s.parked.length,
-    deferred: s.owed.length - (synced + failed + quarantined),
+    deferred: s.owed.length - (synced + failed + quarantined + conflicted),
     halted,
     skipped: null,
   };

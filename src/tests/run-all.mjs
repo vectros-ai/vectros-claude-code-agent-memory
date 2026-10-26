@@ -2,17 +2,15 @@
 /**
  * The suite. `node tests/run-all.mjs` — exits non-zero if anything failed.
  *
- * WHY A RUNNER EXISTS AT ALL. Before this, "the tests pass" meant a human ran eight files by hand
- * and read the prose. There was no runner and no `package.json`, so even the files that DID assert
- * depended on someone checking `$?`. That is exactly it: the suite was green by
- * construction, and `assert.mjs` — *the countermeasure to that very disease* — was wired into 2 of
- * 9 files. Its own header diagnosed the problem and it was then applied only where the problem was
- * found. That is the branch's systemic defect, reproduced inside the fix for it.
+ * WHY A RUNNER EXISTS AT ALL. Without one, "the tests pass" means a human ran the files by hand
+ * and read the prose, and even the files that DO assert depend on someone checking `$?`. The
+ * suite would be green by construction, and `assert.mjs` — *the countermeasure to that very
+ * disease* — would be applied only to the files where someone remembered it.
  *
  * SO THIS RUNNER ENFORCES THE CENSUS, not just the tests. A test file that does not import
  * `assert.mjs` and call `done()` FAILS THE RUN — because a file that cannot report failure is not
- * a test, and the next one added would silently inherit the old shape. The rule is now mechanical
- * instead of remembered, which is the entire thesis of this project applied to its own suite.
+ * a test, and the next one added would silently inherit the old shape. The rule is mechanical
+ * instead of remembered.
  *
  *   node run-all.mjs           # the deterministic suite
  *   node run-all.mjs --all     # + the *-real-test.mjs files (real Haiku calls, ~$0.30; one writes about 536 MiB to a temp file)
@@ -57,22 +55,20 @@ console.log(`(test hooks.log redirected to ${process.env.VECTROS_HOOKLOG_PATH})`
  * DEFAULT PATH ISOLATION — no spawned test file can reach the real, machine-wide `vectros` CLI
  * unless explicitly opted in (the SAME `withReal` gate `*-real-test.mjs` already uses).
  *
- * Found live: a routine `npm test` (no opt-in) still let every spawned hook reach the
+ * Without it, a routine `npm test` (no opt-in) lets every spawned hook reach the
  * REAL `vectros` binary — `resolveCommandPath('vectros')`/`runKeyringHelper()` in `creds.mjs` walk
- * the inherited PATH with no isolation of their own, and until this fix no spawn site here ever
- * overrode it. `smoke.mjs` is IN this suite (not a `*-real-test.mjs`), and its own hook spawns
+ * the inherited PATH with no isolation of their own, and no spawn site here overrides it.
+ * `smoke.mjs` is IN this suite (not a `*-real-test.mjs`), and its own hook spawns
  * shelled straight out to `vectros keyring show --alias <the operator's real, live, pinned alias>`
  * as a side effect of an ordinary test run — the exact class of incident `creds-keyring-test.mjs`
- * case 4 already documents and fixed for the OAuth-token keychain path (a routine `npm test`
- * silently touching a real, machine-wide credential), just never closed for this one. It is not only
- * a blast-radius concern either: a sibling package's CLI documents `keyring show` as a
- * lock-TAKING writer on the shared `~/.vectros/keyring.json` (migrate-on-use), so an unisolated test
- * run can race a real concurrent session's own credential resolution against that same cross-process
- * lock — plausibly what produced a transient TEST-tenant misread on a real invocation the same
- * session this fix was written in.
+ * case 4 already documents for the OAuth-token keychain path (a routine `npm test`
+ * silently touching a real, machine-wide credential). It is not only a blast-radius concern: a
+ * sibling package's CLI documents `keyring show` as a lock-TAKING writer on the shared
+ * `~/.vectros/keyring.json` (migrate-on-use), so an unisolated test run can race a real
+ * concurrent session's own credential resolution against that same cross-process lock.
  *
- * SURGICAL, not a blanket blank. An earlier version of this fix set PATH to one bare empty
- * directory and broke two unrelated files: `dist-smoke-test.mjs` shells out to `npm run build`
+ * SURGICAL, not a blanket blank. Setting PATH to one bare empty directory would break two
+ * unrelated files: `dist-smoke-test.mjs` shells out to `npm run build`
  * (needs the real `npm`/`node` on PATH), and `cli-init-test.mjs`'s fake-`vectros` wrapper
  * (`runInitWithFakeVectros`) is a `.cmd` shim that itself re-invokes `node` by bare name — both
  * need a working PATH, just not one that resolves to the REAL `vectros`. So: keep every real PATH
@@ -138,8 +134,8 @@ for (const f of fs.readdirSync(HERE).filter((x) => x.endsWith('-test.mjs') || x 
  * while authoring the very feature this census now guards). The rule is now mechanical
  * instead of remembered — same rationale as the failure-reporting census above.
  *
- * MATCHES OUTSIDE COMMENTS ONLY — not caught by a test. The first cut grepped the whole
- * file text for the literal string `VECTROS_HOOK_CREDENTIALS`, satisfied by a COMMENT mentioning
+ * MATCHES OUTSIDE COMMENTS ONLY — not caught by a test. Grepping the whole file text for the
+ * literal string `VECTROS_HOOK_CREDENTIALS` would be satisfied by a COMMENT mentioning
  * it (the explanatory comment right above the real override, for instance) just as readily as the
  * actual override — so deleting the one line that matters while leaving the comment above it
  * intact (a very plausible partial revert) would still print `ok`. Comments are stripped before
@@ -192,7 +188,7 @@ for (const f of fs.readdirSync(HERE).filter((x) => x.endsWith('-test.mjs'))) {
     + 'VECTROS_HOOK_CREDENTIALS in live code (a comment mentioning it does not count); init/'
     + 'set-token WRITE to credentialsFile(), and without an override that write lands in the '
     + 'REAL, LIVE credentials.json (isolate.mjs pins it there for *-real-test.mjs\'s sake) — see '
-    + 'cli-init-test.mjs\'s runInit()/runInitWithFakeVectros() for the fix shape.');
+    + 'cli-init-test.mjs\'s runInit()/runInitWithFakeVectros() for a worked example.');
 }
 
 // ── 2. Run them.
@@ -208,8 +204,8 @@ for (const f of files) {
    * A crash is not a failure report — surface it separately. But match STDERR ONLY, and require a
    * STACK FRAME, not the word.
    *
-   * The first cut scanned stdout+stderr for /ReferenceError|TypeError|…/ and immediately flagged
-   * `triage-test.mjs` as CRASH at exit 0 — because that test PRINTS the string "ReferenceError" in
+   * Scanning stdout+stderr for /ReferenceError|TypeError|…/ would flag `triage-test.mjs` as
+   * CRASH at exit 0 — because that test PRINTS the string "ReferenceError" in
    * its own passing message ("worker module loads without ReferenceError? yes"). A detector that
    * cannot tell a stack trace from a sentence about one is the same defect this whole suite exists
    * to catch — a signal must be able to observe the thing it claims. Node writes

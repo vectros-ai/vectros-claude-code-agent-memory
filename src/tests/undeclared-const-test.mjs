@@ -16,7 +16,7 @@
  *       -> SWALLOWED, silently, forever
  *
  * So the line whose entire job is to distinguish *a timeout* from *an empty index* was the line
- * that crashed whenever a timeout happened — and reported nothing at all. this discipline's founding failure,
+ * that crashed whenever a timeout happened — and reported nothing at all. The receipt rule's founding failure,
  * living inside the receipt written to prevent it.
  *
  * WHY NOTHING CAUGHT IT, and why this file is a LINT rather than a test:
@@ -155,13 +155,12 @@ check('RED-proof: the DECLARED sibling in the same sample is NOT flagged',
  * THE INTERPOLATION must survive `blank()`, and this check has to observe the INTERPOLATION —
  * not the identifier's letters.
  *
- * It was `/TIMEOUT_MS/.test(sabCode)`. `SEARCH_TIMEOUT_MS` CONTAINS `TIMEOUT_MS`, and the declared
- * sibling sits in plain code that `blank()` never touches — so this passed whether or not the
- * template literal was erased, i.e. byte-identical under the bug it names and under the fix. The
- * red-proof of a signal, unable to fail.
+ * A check of `/TIMEOUT_MS/.test(sabCode)` would be wrong. `SEARCH_TIMEOUT_MS` CONTAINS
+ * `TIMEOUT_MS`, and the declared sibling sits in plain code that `blank()` never touches — so it
+ * would pass whether or not the template literal was erased, i.e. byte-identical under the bug it
+ * names and under the lint. The red-proof of a signal, unable to fail.
  *
- * That is the same substring defect as `call`-inside-`recallable` in the §N scorer, fixed one file
- * away in this same branch, and shipped here in the check that was supposed to prove a fix. Anchor
+ * That is the same substring defect as `call`-inside-`recallable` in a scorer. Anchor
  * on the `${...}` form: it exists ONLY inside the template literal, so it is gone precisely when
  * the bug is present.
  */

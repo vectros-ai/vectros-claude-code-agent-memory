@@ -3,16 +3,13 @@
  * RED-PROOF: `report.mjs --compare` must NOT print "AGREED" when the `queue/` directory
  * itself could not be listed.
  *
- * FOUND BY LINT, NOT BY DESIGN. The first-ever `eslint` pass over this source (it had no
- * config before landing under `packages/`) flagged `dirUnreadable` in `compare()` as an unused
- * variable. It was not dead code — it was a WIRED-AND-DEAD SAFETY GATE: set on a genuine
- * `fs.readdirSync(queueDir())` failure, and then never consulted. With `files = []` in that branch,
- * `results` stays empty, so both `divergent` and `unknown` are VACUOUSLY empty too, and the old
- * code fell straight through to printing "AGREED — every post-cutover candidate is in both
- * stores" over a corpus it had never looked at — the exact "missing is not broken" inversion this
- * module's own header spends thirty lines refusing (see `noteSkip('the ENTIRE queue dir', ...)`'s
- * comment). This is the automated proof the fix actually closes that gap, not just that lint is
- * quiet.
+ * `dirUnreadable` in `compare()` is a safety gate: set on a genuine `fs.readdirSync(queueDir())`
+ * failure, it must be CONSULTED. With `files = []` in that branch, `results` stays empty, so both
+ * `divergent` and `unknown` are VACUOUSLY empty too, and an unconsulted flag would fall straight
+ * through to printing "AGREED — every queue entry with an id is in both stores" over a corpus it
+ * had never looked at — the exact "missing is not broken" inversion this module's own header
+ * spends thirty lines refusing (see `noteSkip('the ENTIRE queue dir', ...)`'s comment). This is
+ * the automated proof the gate is consulted, not just that lint is quiet.
  *
  * REPRODUCED PORTABLY: replacing `queue/` with a plain FILE forces `fs.readdirSync` to throw
  * ENOTDIR on every platform, deterministically — unlike a permission-bit trick, which is a known

@@ -144,21 +144,20 @@ for (const [file, event] of HOOKS) {
  * THE WORKER IS NOT A HOOK, and that is exactly why it needs its own line here.
  *
  * `capture-worker.mjs` is spawned BY `capture.mjs`, and only when the content gate opens — so the
- * loop above, which drives the five hook entry points, never loads it. It is also the only entry
- * point in this tree with a top-level `await` (the Phase A spool drain), which makes an import
- * error or an unhandled rejection at module scope a NON-ZERO exit rather than the fail-open exit 0
- * every hook is held to. The detached spawn observes neither: nothing reads the worker's status,
- * so a broken worker would present as capture silently producing no candidates, forever.
+ * loop above, which drives the five hook entry points, never loads it. A broken import
+ * (module-not-found, syntax error) exits NON-ZERO here rather than the fail-open exit 0 every hook
+ * is held to. The detached spawn observes neither: nothing reads the worker's status, so a broken
+ * worker would present as capture silently producing no candidates, forever.
  *
  * Invoked with NO ARGUMENTS on purpose — it returns before doing anything, so this asserts the
- * module LOADS and its top-level await resolves, and it touches no transcript, no store and no
+ * module LOADS and its `main()` returns, and it touches no transcript, no store and no
  * queue. That is the whole failure class a spawned-but-unobserved process can hide.
  */
 {
   /**
    * THE HARNESS INVARIANT, asserted at the one place that spawns the worker.
    *
-   * The worker ends every run with an unconditional `drainAll`, and credentials are deliberately
+   * The worker ends every real run with an unconditional `drainAll`, and credentials are deliberately
    * NOT isolated. So the only thing standing between a suite run and a real `POST /v1/records` with
    * a real credential is the `SPOOL_OFF` marker `isolate.mjs` writes. That is a property of the
    * harness, not of any one test, and a property nothing asserts is one a refactor deletes.
@@ -171,7 +170,7 @@ for (const [file, event] of HOOKS) {
   });
   const err = (r.stderr || '').trim();
   console.log(`  ${'capture-worker.mjs'.padEnd(22)} ${'(spawned, not a hook)'.padEnd(17)} exit=${r.status}`);
-  check('capture-worker.mjs loads (imports resolve, top-level await settles)',
+  check('capture-worker.mjs loads (imports resolve, main() returns)',
     !/ReferenceError|TypeError|SyntaxError|ERR_MODULE_NOT_FOUND|Cannot find|UnhandledPromiseRejection/.test(err),
     err.split('\n')[0]);
   check('capture-worker.mjs exits 0 with no arguments', r.status === 0, `exit=${r.status}: ${err.split('\n')[0]}`);

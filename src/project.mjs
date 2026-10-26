@@ -37,7 +37,7 @@ import { hlog } from './hooklog.mjs';
 import { orphanedEditsDir, projectionLog, projectsDir } from './paths.mjs';
 import { writeFileAtomic } from './atomic.mjs';
 import { dirUnder, dirWithin, encodeProjectDir, normalizeDir, optOutEnvOn } from './exclusion.mjs';
-import { optOutConfig, PINNED_LIMIT, PINNED_MIN_PRIORITY, PROJECT_HOOK_MAX_CHARS, PROJECT_TIMEOUT_MS } from './config.mjs';
+import { optOutConfig, PINNED_LIMIT, PINNED_MIN_PRIORITY, PROJECT_GIT_TIMEOUT_MS, PROJECT_HOOK_MAX_CHARS, PROJECT_TIMEOUT_MS } from './config.mjs';
 
 
 /**
@@ -57,7 +57,7 @@ function indexRefusal(root, lists, folder) {
     const env = { ...process.env };
     for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_NAMESPACE']) delete env[k];
     const out = execFileSync('git', ['worktree', 'list', '--porcelain', '-z'], {
-      cwd: root, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, timeout: 5000,
+      cwd: root, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, timeout: PROJECT_GIT_TIMEOUT_MS,
     });
     // NUL-separated, so a path with a newline in it stays in one piece.
     for (const field of out.split(String.fromCharCode(0))) if (field.startsWith('worktree ')) trees.push(path.resolve(field.slice('worktree '.length)));
@@ -170,12 +170,13 @@ export function resolveMemoryIndex() {
 
   // 1. Derive from the git root (the main worktree, shared by every sibling worktree).
   let derivedMiss = false;
+  let gitTimedOut = false;
   try {
     const common = execFileSync('git', ['rev-parse', '--git-common-dir'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       windowsHide: true, // no flashed console window (see capture.mjs)
-      timeout: 5000,     // never let a wedged git hang a hook — fall through to discovery instead
+      timeout: PROJECT_GIT_TIMEOUT_MS, // never let a wedged git hang a hook — fall through to discovery instead
     }).trim();
     const root = path.dirname(path.resolve(common));       // .../monorepo/.git -> .../monorepo
     const slug = encodeProjectDir(root);
@@ -185,7 +186,11 @@ export function resolveMemoryIndex() {
       return why ? { index: '', why } : { index: p, why: '' };
     }
     derivedMiss = true;
-  } catch { /* silence-ok: not a repo / no git / git timed out — all mean "this derivation does not apply", and step 2's discovery below is the designed next attempt. A failure to resolve ends at the `skip: memory index not resolved` receipt, which main() hlogs. */ }
+  } catch (e) {
+    // silence-ok: not a repo / no git / git timed out — all mean "this derivation does not apply", and step 2's discovery below is the designed next attempt. A failure to resolve ends at the `skip: memory index not resolved` receipt, which main() hlogs. A timeout is remembered so that receipt names it instead of blaming the lists.
+    gitTimedOut = e?.code === 'ETIMEDOUT';
+  }
+  const gitNote = gitTimedOut ? ` (git did not answer within ${PROJECT_GIT_TIMEOUT_MS}ms, so the repository root could not be derived)` : '';
 
   // 2. Fall back to discovery: if exactly ONE project has a memory index, it is unambiguous — as
   //    to WHICH index, not as to whether this session may write to it. A folder name is only a
@@ -198,7 +203,7 @@ export function resolveMemoryIndex() {
       index: '',
       why: derivedMiss
         ? 'no memory index exists under the project folder derived from the repository path, and a directory list is set, so another project\'s index is not guessed'
-        : 'a directory list is set, so the memory index is not guessed from the projects folder',
+        : `a directory list is set, so the memory index is not guessed from the projects folder${gitNote}`,
     };
   }
   try {
@@ -207,7 +212,7 @@ export function resolveMemoryIndex() {
     if (found.length === 1) return { index: path.join(projectsDir(), found[0], 'memory', 'MEMORY.md'), why: '' };
   } catch { /* silence-ok: the projects dir is unreadable or absent — indistinguishable here from "no index found", and BOTH correctly fall to the `return` below, whose `skip: memory index not resolved` receipt main() hlogs. The refusal is reported; only its reason is coarse. */ }
 
-  return { index: '', why: '' }; // ambiguous or absent -> skip; never guess, never create
+  return { index: '', why: gitTimedOut ? `memory index not resolved${gitNote}` : '' }; // ambiguous or absent -> skip; never guess, never create
 }
 
 const BASE = (cred('VECTROS_API_BASE_URL') || 'https://api.vectros.ai').replace(/\/+$/, '');
@@ -265,9 +270,9 @@ function renderEntries(records) {
 /**
  * Returns the EXACT region that will sit between `-->` and the END marker, and its hash.
  * These must correspond byte-for-byte: the divergence check slices this region back out and
- * re-hashes it. (An earlier cut hashed the body but wrote `-->\n${body}`, so the slice carried
- * one extra newline -> every refresh "diverged", quarantining a file each tick and drowning the
- * real signal. Keep the hashed text and the written text literally the same string.)
+ * re-hashes it. (Hashing the body but writing `-->\n${body}` would make the slice carry one extra
+ * newline -> every refresh "diverges", quarantining a file each tick and drowning the real signal.
+ * Keep the hashed text and the written text literally the same string.)
  */
 function renderBlock(records) {
   const region = [

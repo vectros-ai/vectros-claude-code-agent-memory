@@ -25,7 +25,7 @@
  *   temp+rename + retry      ->  0 torn reads,     5/16000 writes lost (0.03%)
  *
  * So the naive fix stops the corruption and silently throws away half the data instead — it
- * would have looked healthier while losing more. The retry is not a nicety; it is the fix.
+ * would look healthier while losing more. The retry is not a nicety; it is what makes the write safe.
  * (This ships in the OSS package, where every Windows user would hit it.)
  *
  * ALSO: the temp name carries the pid. A shared temp path (`file + '.tmp'`) lets two concurrent
@@ -43,16 +43,12 @@ import { tunables } from './config.mjs';
 /**
  * THE RETRY BUDGET comes from the config seam via `tunables()` rather than a named import, because
  * `config.mjs` imports `readJsonSafe` from THIS file (to keep one corrupt-detector, not two) and a
- * named import would be read inside config's dead zone. That much was right.
+ * named import would be read inside config's dead zone.
  *
- * What the original version of this comment got WRONG, and it shipped a crash: it claimed the
- * accessor also buys late resolution ("resolves at the time it is consulted"). It does not.
- * `tunables()` memoizes on its first call, and that first call is `const V = tunables()` during
- * config's own import — so the value is fixed at import time exactly like a named export would be.
- * The accessor buys CYCLE-SAFETY and nothing else. Anyone who acts on the old sentence — adding a
- * config-reload path, say — will find `tunables()` never re-reads.
- *
- * The real hazard is below, and it is the opposite direction from the one that comment described.
+ * The accessor buys CYCLE-SAFETY and nothing else, not late resolution. `tunables()` memoizes on
+ * its first call, and that first call is `const V = tunables()` during config's own import — so the
+ * value is fixed at import time exactly like a named export would be. A config-reload path would
+ * find `tunables()` never re-reads.
  */
 /**
  * ⚠ EVERY BINDING BELOW IS A HOISTED `function`, NOT A `const`, AND THAT IS LOAD-BEARING.
@@ -72,8 +68,8 @@ import { tunables } from './config.mjs';
  * dead zone until this body resumes.
  *
  * So the hazard is NOT "config's exports are in TDZ" (the direction the re-entrancy guard in
- * `config.mjs` addresses, and the direction the first version of the bootstrap test modelled). It
- * is the mirror image: THIS module's constants are in TDZ while config calls into it.
+ * `config.mjs` addresses). It is the mirror image: THIS module's constants are in TDZ while
+ * config calls into it.
  *
  * AND IT FAILED CLOSED, SILENTLY. `readJsonSafe` returns before touching any of these on ENOENT
  * (no config file — the common case) and on a clean read, so every ordinary startup worked. It
@@ -99,18 +95,16 @@ function isContended(code) { return code === 'EPERM' || code === 'EACCES' || cod
 /**
  * A real synchronous sleep (not a busy spin) — the reader's open window is sub-millisecond.
  *
- * ⚠ `var`, NOT `let`, AND THAT IS THE ACTUAL FIX. The first attempt moved the `SharedArrayBuffer`
- * construction into this function and left `let _ia = null` at module scope — which changed nothing,
- * because the BINDING is what sits in the temporal dead zone, not the allocation. Verified with a
- * fixture reproducing the real leaf-first entry order: reading a module-scope `let` during the
- * cycle's bootstrap throws `ReferenceError`.
+ * ⚠ `var`, NOT `let`. Allocating the `SharedArrayBuffer` inside this function while keeping
+ * `let _ia = null` at module scope would change nothing, because the BINDING is what sits in the
+ * temporal dead zone, not the allocation: reading a module-scope `let` during the cycle's bootstrap
+ * throws `ReferenceError` (the real leaf-first entry order).
  *
- * And the consequence was invisible. The throw lands in this function's OWN `catch`, so there is no
- * crash and no log line — the retry loop simply stops sleeping. The 12 x 3ms contention budget this
- * whole module is built on (56% write loss -> 0.03%) silently became 12 back-to-back attempts with
- * ZERO delay for the duration of the bootstrap read. A degraded guarantee that reports success is
- * exactly what this discipline exists to prevent, and it was introduced by the commit fixing a
- * violation of that same discipline.
+ * And the consequence would be invisible. The throw lands in this function's OWN `catch`, so there
+ * is no crash and no log line — the retry loop simply stops sleeping. The 12 x 3ms contention
+ * budget this whole module is built on (56% write loss -> 0.03%) silently becomes 12 back-to-back
+ * attempts with ZERO delay for the duration of the bootstrap read. A degraded guarantee that
+ * reports success is exactly what this module exists to prevent.
  *
  * `var` is hoisted AND initialized to `undefined`, so it has no dead zone at all. That is the whole
  * reason to reach for it here, in the one module whose exports run before its own body.
@@ -152,7 +146,7 @@ export function writeFileAtomic(file, data) {
 }
 
 /**
- * Read JSON, distinguishing the three outcomes the old `catch {}` collapsed into one:
+ * Read JSON, distinguishing the outcomes a bare `catch {}` would collapse into one:
  *   { value, state: 'fresh'   } — no file yet. Defaults are CORRECT here.
  *   { value, state: 'ok'      } — parsed.
  *   { value, state: 'unreadable' } — the read FAILED; the bytes are unknown and may be fine.
@@ -160,34 +154,26 @@ export function writeFileAtomic(file, data) {
  *                                    Defaults are
  *                                 WRONG here: this is data loss, and the caller must say so.
  * Conflating 'fresh' with a read failure is precisely how a torn read became a silent reset — and
- * conflating the two FAILURES with each other is how the fix for that wedged a session forever.
+ * conflating the two FAILURES with each other would wedge a session forever.
  * See the `unreadable` vs `damaged` note in readJsonSafe: they need opposite responses.
  */
 export function readJsonSafe(file, defaults = {}) {
   let raw;
   /**
-   * RETRY ON CONTENTION — the read path had none.
+   * RETRY ON CONTENTION. `EPERM`/`EACCES`/`EBUSY` on a read mean "someone has this open right
+   * now", not "this file is damaged", so the read path retries exactly as the write sites do.
+   * Without it a contended read would return a read failure, i.e. the state this function defines
+   * as *"data loss, and the caller must say so"*, and callers would write the defaults back: the
+   * 33.7% torn-read cascade, published durably instead of transiently.
    *
-   * `CONTENDED` was consulted at both WRITE sites and nowhere else, so `EPERM`/`EACCES`/`EBUSY` on
-   * a read — which mean "someone has this open right now", not "this file is damaged" — returned
-   * a read failure, i.e. the state this function defines as *"data loss, and the caller must
-   * say so"*. Callers then write the defaults back. That is the 33.7% torn-read cascade re-entering
-   * through the door the fix left open, now published durably instead of transiently.
-   *
-   * WORSE: the atomic-write fix probably WIDENED it. Writers used to `writeFileSync`; they now
-   * `renameSync` — which is exactly the Windows `MoveFileEx` contention measured at 56% on this
-   * machine. The reader that most needs the retry is `evaluate.mjs` (`PostToolUse`, the most
-   * frequent reader), racing `writeState` on every Stop.
-   *
-   * This is the fourth of four mechanisms this branch wired only at the site where its bug was
-   * diagnosed — a systemic gap, already named as unfixed while the
-   * change claimed otherwise.
+   * Writers `renameSync`, which is exactly the Windows `MoveFileEx` contention measured at 56%. The
+   * reader that most needs the retry is `evaluate.mjs` (`PostToolUse`, the most frequent reader),
+   * racing `writeState` on every Stop.
    *
    * ── `unreadable` vs `damaged`: THE DISTINCTION IS THE WHOLE CONTRACT ──
    *
-   * Both used to return `state: 'corrupt'` with the difference stated only in a PROSE `why`, which
-   * no caller could branch on — 2 consumers, both using it as an `hlog` format string. A receipt
-   * nobody reads is not a receipt, and this one was hiding the single most consequential bit in the
+   * They are two values, not one `corrupt` state with the difference in a PROSE `why`, because no
+   * caller can branch on prose. The distinction carries the single most consequential bit in the
    * module: **did we SEE the content?**
    *
    *   unreadable — the read itself failed. The bytes are UNKNOWN. They may be perfectly good.
@@ -197,23 +183,22 @@ export function readJsonSafe(file, defaults = {}) {
    *                the content is ALREADY LOST. Refusing to write leaves it damaged FOREVER —
    *                nothing else creates or repairs this file. -> WRITING DEFAULTS IS THE REPAIR.
    *
-   * That asymmetry is not academic; collapsing it cost both directions on this branch. Treating
+   * That asymmetry is not academic; collapsing it costs in both directions. Treating
    * `damaged` as transient (refuse forever) wedges a session permanently stateless: `isFirstPrompt`
    * latches TRUE, so every prompt pays a full multi-facet orient; and `evaluate.mjs`'s `lastEvalAt`
    * defaults to 0, so its debounce always opens and never persists — a detached billed `claude -p`
    * per tool call, unbounded. Treating `unreadable` as permanent (write defaults) is the 33.7%
    * torn-read cascade, published durably.
    *
-   * So the states are what callers branch on, and the prose is only for humans. `corrupt` is gone
-   * as a value: it conflated "a retry fixes this" with "a retry never will", which is the same
-   * founding `null`-vs-`[]` story one layer beneath where anyone was looking for it.
+   * So the states are what callers branch on, and the prose is only for humans. There is no
+   * `corrupt` value: it would conflate "a retry fixes this" with "a retry never will".
    */
   for (let i = 0; ; i++) {
     try { raw = fs.readFileSync(file, 'utf8'); break; }
     catch (e) {
       if (e.code === 'ENOENT') return { value: { ...defaults }, state: 'fresh' };
       // Contention is transient: spin the same 12x3ms the write path uses. Only after exhausting
-      // it is "can't read" genuinely can't-tell — and THAT is worth calling corrupt.
+      // it is "can't read" genuinely can't-tell — and THAT is reported as `unreadable`.
       if (!isContended(e.code) || i >= retries()) {
         return { value: { ...defaults }, state: 'unreadable', why: `read ${e.code}${isContended(e.code) ? ` after ${retries()} retries` : ''}` };
       }
@@ -235,8 +220,8 @@ export function readJsonSafe(file, defaults = {}) {
    * Every consumer of this function merges the result over a defaults OBJECT (state.mjs,
    * creds.mjs, config.mjs), so a root that is not a plain object is never usable to any of them.
    * `[{"CONTEXT_CAP": 8000}]` in a config file, or an array root in a hand-authored
-   * `credentials.json`, previously read as a perfectly clean parse with nothing applied and nothing
-   * said. `damaged` is the honest state: the bytes were read, and their content is not usable.
+   * `credentials.json`, would otherwise read as a perfectly clean parse with nothing applied and
+   * nothing said. `damaged` is the honest state: the bytes were read, and their content is not usable.
    */
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return {
@@ -251,27 +236,12 @@ export function readJsonSafe(file, defaults = {}) {
 /**
  * ROLL a log aside instead of trimming it. One rename; the history survives.
  *
- * This replaces `rotateAtomic(file, keepLines)`, which read the file and rewrote the last N
- * lines — TWO latent defects in one call. (1) read -> `writeFileSync` is the truncate-in-place
- * race, on a file contended by EVERY hook in EVERY session. (2) **it destroyed the head:**
- * everything past `keepLines` was discarded, so the log could never answer "is recall firing?"
- * beyond its last 2000 lines. The instrument that exists because fail-open hooks are silent was
- * built to become amnesiac.
- *
- * CORRECTION — BOTH defects were LATENT; neither had ever fired. The log sits
- * under `MAX_BYTES`, so `rotateAtomic` had never run. The original justification for this change
- * said the discard "is why the log answered for only ~21 hours while the state files went back
- * days" — **that was false, and self-contradictory with the very next clause** ("dormant only
- * because the log sat under its size threshold"): a rotation that never ran cannot have trimmed
- * anything. The real reason for the ~21h span is mundane — the log simply started then; the state
- * files are older because `orient.mjs` was wired earlier. There was no amnesia to explain.
- *
- * The fix stands on its own: the discard is real and would fire the moment the log crossed 512K,
- * on the one file that tells us whether any hook works. But the reasoning that reached for it was
- * the discipline that says "suspecting your own change? timing is not evidence" failing inside the
- * very branch that introduced that discipline — a coincidence in time was read as a cause, and the
- * number was then repeated as measured. Kept here, wrong-and-corrected, because the mistake is the
- * more useful artifact.
+ * Trimming instead (read the file, rewrite the last N lines) has TWO defects in one call. (1) read
+ * -> `writeFileSync` is the truncate-in-place race, on a file contended by EVERY hook in EVERY
+ * session. (2) **it destroys the head:** everything past the kept lines is discarded, so the log
+ * could never answer "is recall firing?" beyond its tail. The instrument that exists because
+ * fail-open hooks are silent would be built to become amnesiac. The discard would fire the moment
+ * the log crossed its size cap (`HOOKLOG_MAX_BYTES`, 512K by default).
  *
  * A rename is a single atomic step: no read, no rewrite, nothing to interleave, and the bytes are
  * preserved rather than summarized. Appenders resolve the path per call (`appendFileSync` opens

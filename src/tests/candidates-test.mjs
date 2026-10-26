@@ -611,5 +611,40 @@ console.log('\n=== 14. the redaction gate — propose() honours quarantine/unava
     !JSON.stringify(f.calls[0].body).includes('AKIAIOSFODNN7EXAMPLE'), JSON.stringify(f.calls[0].body));
 }
 
+// ── 15. kind and dest are closed sets AT THE POINT OF SENDING. They are normalised where a candidate is first built
+// (capture-map.mjs), but propose() is also called from the spool flush with a candidate read back from disk, and a
+// spool or queue entry written by an earlier version was never checked. Whatever reaches propose() is what is sent,
+// so this is where it has to hold.
+console.log('\n=== 15. propose() sends only allowed kind and dest, whatever the stored candidate carries ===');
+{
+  const leak = 'FREE-TEXT-LEFT-IN-A-CLOSED-FIELD';
+  for (const [label, kind, dest] of [
+    ['a sentence in both', leak, leak],
+    ['wrong case and a plural', 'Feedback', 'docs'],
+    ['non-strings', { k: leak }, [leak]],
+  ]) {
+    const f = fake({ status: 201, body: rec({ title: 't', disposition: 'pending' }) });
+    await propose('s', { externalId: `s:${label}`, title: 't', body: 'b', kind, dest }, { fetchImpl: f.impl });
+    const sent = f.calls[0].body;
+    check(`${label}: the stray value is nowhere in the request`, !JSON.stringify(sent).includes(leak), JSON.stringify(sent));
+    check(`${label}: kind is dropped from the payload, like an absent one`, !('kind' in sent.payload), JSON.stringify(sent.payload));
+    check(`${label}: dest is dropped from the payload (no suggestion)`, !('dest' in sent.payload), JSON.stringify(sent.payload));
+  }
+  {
+    const f = fake({ status: 201, body: rec({ title: 't', disposition: 'pending' }) });
+    await propose('s', { externalId: 's:ok', title: 't', body: 'b', kind: 'feedback', dest: 'doc' }, { fetchImpl: f.impl });
+    eq('an allowed kind is sent unchanged', f.calls[0].body.payload.kind, 'feedback');
+    eq('an allowed dest is sent unchanged', f.calls[0].body.payload.dest, 'doc');
+  }
+  {
+    // An absent kind stays absent: a dropped key is the safe answer for an enum (a default would overwrite a value an
+    // earlier attempt of the same upsert stored).
+    const f = fake({ status: 201, body: rec({ title: 't', disposition: 'pending' }) });
+    await propose('s', { externalId: 's:none', title: 't', body: 'b' }, { fetchImpl: f.impl });
+    check('an absent kind and dest are still absent from the payload',
+      !('kind' in f.calls[0].body.payload) && !('dest' in f.calls[0].body.payload), JSON.stringify(f.calls[0].body.payload));
+  }
+}
+
 clearGap();
 done();

@@ -5,7 +5,7 @@
  * Fires when the assistant finishes a turn; receives `last_assistant_message`.
  * Its deterministic job: stash the tail of that message into the per-session state
  * so the NEXT UserPromptSubmit recall can condition its query on recent context —
- * the fix for terse follow-ups ("go do it"), where the retrieval signal lives in the
+ * what makes terse follow-ups ("go do it") work, where the retrieval signal lives in the
  * prior assistant turn, not the short user prompt. (Capture — deciding what is worth
  * remembering and writing it — is inference and stays the agent's job / a future
  * async extract-reconcile pass; this hook does NOT write memory.)
@@ -31,8 +31,8 @@ async function main() {
   const msg = (input.last_assistant_message || input.assistant_message || '').toString();
   const sessionId = input.session_id || 'nosession';
   /**
-   * AN EMPTY MESSAGE STILL PROVES THE SESSION IS ALIVE — and that used to return before writing
-   * anything, which later work turned into a correctness bug rather than a missing tail.
+   * AN EMPTY MESSAGE STILL PROVES THE SESSION IS ALIVE — returning before writing anything would
+   * be a correctness bug, not merely a missing tail.
    *
    * `lastStopAt` is the staleness clock for BOTH the sweep (may I flush this session's transcript?)
    * and the orphan nudge (may I hand its candidates to another agent?). A session resumed after a
@@ -107,16 +107,16 @@ async function main() {
  *
  * This was `main().catch(() => {})`. ANY throw anywhere in main() lands here, so a hook that dies
  * on line one and a hook that ran perfectly and had nothing to say produced the SAME observable:
- * nothing. That is the founding story behind this discipline (a recall hook read the wrong field name and no-op'd for a
+ * nothing. That is the founding story behind the receipt rule (a recall hook read the wrong field name and no-op'd for a
  * week) sitting on the outermost line of six different hooks — including, pointedly,
  * `recall-eval-worker.mjs`, whose own comment names a bug this construct swallowed.
  *
- * It was also invisible to this discipline's own ENFORCER: `receipt-lint-test.mjs` matched only `catch (e) {` and
+ * It was also invisible to the receipt rule's own ENFORCER: `receipt-lint-test.mjs` matched only `catch (e) {` and
  * consumed `(() => {})` as the optional binding, landing on `;` where it wanted `{`, and skipping
  * the block entirely. Six swallows, zero findings, green build. The lint reads arrow handlers now.
  *
  * Exit stays 0 and nothing rethrows: a hook must never break the user's turn. The log is the whole
- * remedy — it makes "dead" distinguishable from "quiet", which is all this discipline ever asks.
+ * remedy — it makes "dead" distinguishable from "quiet", which is all the receipt rule ever asks.
  */
 main().catch((e) => {
   try { hlog('stop', `hook CRASHED (${e?.code || e?.name || 'error'}) — this invocation did NOTHING: ${e?.message || e}`); }

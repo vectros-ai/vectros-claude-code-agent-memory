@@ -47,15 +47,16 @@ const BASE = (cred('VECTROS_API_BASE_URL') || 'https://api.vectros.ai').replace(
 function out(obj) { process.stdout.write(JSON.stringify(obj)); }
 
 /**
- * THIS is where the state reset came from. The old body was:
+ * A hand-rolled state reader is the root cause of the state reset:
  *
  *   try  { return { injectedIds: [], lastAssistant: '', promptCount: 0, ...JSON.parse(read(p)) }; }
  *   catch { return { injectedIds: [], lastAssistant: '', promptCount: 0 }; }
  *
- * Nothing decrements promptCount — a torn read hit that `catch`, handed back promptCount: 0, and
- * the next line counted it up from 1. Live session, observed: 37 -> 9. The catch also silently
- * dropped `injectedIds` (so recall re-injects memories it already showed) and `orientPending`.
- * Six processes were racing this file with truncating writes; 33.7% of reads tore. → `state.mjs`.
+ * Nothing decrements promptCount — a torn read hits that `catch`, hands back promptCount: 0, and
+ * the next line counts it up from 1 (observed on a live session: 37 -> 9). The catch also silently
+ * drops `injectedIds` (so recall re-injects memories it already showed) and `orientPending`.
+ * A hand-rolled reader like this reads a torn file when writers truncate concurrently (measured:
+ * 33.7% of reads). → `state.mjs`.
  */
 function loadState(sessionId) {
   // Returns the RECEIPT too — a corrupt (usually TORN) read must not be published back over a
@@ -68,7 +69,7 @@ function loadState(sessionId) {
  *
  * THE EMPTY ARRAY IS THE WHOLE PROBLEM. "The search failed" and "there is nothing to recall" are
  * the same value here, and the second is a completely normal answer — so a total failure of recall
- * renders as a perfectly healthy quiet session. This is the founding story behind this discipline (a recall hook read the
+ * renders as a perfectly healthy quiet session. This is the founding story behind the receipt rule (a recall hook read the
  * wrong field name and did nothing, in every session, for a week) and it has ALREADY recurred in
  * this exact function: `limit: 200` exceeded the API's max of 100, every call 400'd, `!res.ok`
  * swallowed it, and the loop reported "0 memory records" for as long as nobody thought to ask.
@@ -100,7 +101,7 @@ async function search(query, limit) {
     clearTimeout(to);
     if (!res.ok) {
       /**
-       * WIDEN THE RECEIPT. The old line (status + 200 chars of body) was enough to see a 413
+       * A WIDE RECEIPT. A bare line (status + 200 chars of body) is enough to see a 413
        * but not enough to DIAGNOSE a 403: a gateway-level block's own error contract puts
        * `requestId: null` in the static block body — the edge never had one to give — so the real
        * correlator is the `x-amz-cf-id` CloudFront RESPONSE HEADER, which this line never captured,
@@ -262,16 +263,16 @@ async function main() {
   // NOTE: `orientPending` is NOT consumed here. It is decided at the single commit site at the
   // bottom, on the receipt that says the enumeration RAN — read that comment before touching this.
   //
-  // It used to be cleared on ENTRY, which made the comment above false in the one case it
-  // describes: `search()` and `fetchOrientSet()` both failed OPEN to `[]`, so a network blip or an
-  // expired key produced hits=[] and orientLines=[], fell into the then-existing nothing-to-inject
-  // guard — whose body was `writeState` — and persisted `orientPending: false`. The boundary was
-  // consumed, the orientation never re-owed, and that session ran its whole life with no pinned set
-  // and no multi-query. It failed precisely on the "brand-new or offline-ish session" that guard's
-  // own comment called out as when standing context matters most.
+  // Clearing it on ENTRY would make the comment above false in the one case it describes: if
+  // `search()` and `fetchOrientSet()` both fail OPEN to `[]`, a network blip or an expired key
+  // produces hits=[] and orientLines=[]; a nothing-to-inject guard whose body was `writeState`
+  // would then persist `orientPending: false`. The boundary would be consumed, the orientation
+  // never re-owed, and that session would run its whole life with no pinned set and no
+  // multi-query — failing precisely on the "brand-new or offline-ish session" where standing
+  // context matters most.
   //
-  // That guard is gone — it was the same bug's other face, and it caused two of them. Both are in
-  // the commit-site comment; this one is here because THIS is the line you reach for first.
+  // So there is no such guard; the commit-site comment explains both failure directions, and this
+  // one is here because THIS is the line you reach for first.
 
   let hits = [];
   let header;
@@ -291,7 +292,7 @@ async function main() {
     // sparse drift-catcher rather than the primary mechanism. No inference: N cheap
     // parallel searches stay far inside the 30s UserPromptSubmit budget.
     //
-    // The ENUMERATION rides here too, rather than in the SessionStart hook where it used to live.
+    // The ENUMERATION rides here too, rather than in the SessionStart hook.
     // Claude Desktop starts a session PROCESS about once a minute that never receives a prompt;
     // enumerating at process start spent ~1400 REST calls/day orienting sessions that did nothing.
     // The first prompt is the first work, so it is the honest place to pay. See orient.mjs.
@@ -362,10 +363,9 @@ async function main() {
   let ownPending = null;
   try {
     const pending = await addressablePending(sessionId);
-    // HONOUR THE null RECEIPT (this discipline; queue census 3 of 4, now against the record
-    // store). `[]` on an unreachable store is indistinguishable from "nothing to settle", so the
-    // nudge simply never fires — and the nudge is the ONLY thing that tells the agent candidates
-    // are waiting. The failure is therefore invisible by construction: no nudge looks exactly like
+    // HONOUR THE null RECEIPT (the receipt rule's second half). `[]` on an unreachable store is
+    // indistinguishable from "nothing to settle", so the nudge simply never fires — and the nudge
+    // is the ONLY thing that tells the agent candidates are waiting. The failure is therefore invisible by construction: no nudge looks exactly like
     // no candidates. Quiet is still right (a nudge must never break a turn), but silent is not.
     if (pending === null) {
       hlog('recall', 'RECORDS UNREACHABLE — no nudge this turn; pending candidates cannot be seen', sessionId);
@@ -404,9 +404,8 @@ async function main() {
    * `null` (unknown — an unreadable queue or a throw) does NOT pass. If we cannot tell whether this
    * session owes work, we do not hand it somebody else's.
    *
-   * This surfaced by falsifying the comment that used to sit here, which asserted the
-   * two blocks were "mutually exclusive by construction". They were not. The assertion was written
-   * before the predicate, and the predicate was chosen to be convenient rather than true.
+   * The two blocks (own nudge, orphan nudge) are not "mutually exclusive by construction": the
+   * exclusion is delivered by this predicate, and an assertion of it is not a guarantee.
    *
    * ONE ORPHAN SESSION PER TURN, and only its own block. Nine backlogged sessions arriving at once
    * is not a nudge, it is a wall, and the all-or-nothing budget rule would drop the lot anyway.
@@ -417,8 +416,8 @@ async function main() {
    *
    * COST, and this number is why the implementation looks the way it does. `orphanedPending` is a
    * QUEUE-dir readdir (9 files on this machine, against 2,337 state files), one fold per queue, and
-   * a single state read per survivor: MEASURED 6ms. The first version enumerated the STATE dir and
-   * parsed every session's transcript — 218 MB — for a `residual` it then discarded: **1818 ms on
+   * a single state read per survivor: MEASURED 6ms. Enumerating the STATE dir and parsing every
+   * session's transcript — 218 MB — for a `residual` that is then discarded measured **1818 ms on
    * this synchronous path, on every prompt.** If you change what this reads, RE-MEASURE it here; a
    * hook on the prompt path is the one place a lazy enumeration is not merely wasteful. It is
    * guarded by the same try/catch discipline: a throw must not cost the turn its recall hits.
@@ -428,9 +427,9 @@ async function main() {
   let orphanPick = null;
   let heldOrphans = [];
   /**
-   * SCAN UNCONDITIONALLY, RENDER ONLY WHEN `ownPending === 0` — and the split is the fix for a
-   * regression this branch introduced. Renewal was folded into the render path, so it inherited the
-   * render path's gate and covered only `orphans[0]`. Two holes of the same shape:
+   * SCAN UNCONDITIONALLY, RENDER ONLY WHEN `ownPending === 0` — the split exists because folding
+   * renewal into the render path would make it inherit the render path's gate and cover only
+   * `orphans[0]`. Two holes of the same shape:
    *
    *   · a holder that acquires ANY candidate of its own stops scanning, so it stops renewing — and
    *     a session working through a foreign queue is precisely one likely to produce candidates.
@@ -461,17 +460,17 @@ async function main() {
       hlog('recall', `orphan nudge SKIPPED (unexpected ${e?.code || e?.name || 'error'}) — swept candidates are NOT being surfaced: ${e?.message || e}`, sessionId);
     }
   } else {
-    // This discipline's receipt rule: a fail-open path must say it ran and what it fell back to. This one is rare and
-    // its absence would otherwise be indistinguishable from "no orphans exist".
+    // The receipt rule: a fail-open path must say it ran and what it fell back to. This one is
+    // rare and its absence would otherwise be indistinguishable from "no orphans exist".
     hlog('recall', `orphan nudge SKIPPED — this turn carries no session_id, and a cross-session claim keyed on the shared 'nosession' fallback cannot be held or released by anyone in particular; swept candidates stay queued for a session that has an identity`, sessionId);
   }
 
-  // THERE IS NO EARLY RETURN HERE, AND THAT IS THE FIX — see the commit block at the bottom.
+  // THERE IS NO EARLY RETURN HERE, ON PURPOSE — see the commit block at the bottom.
   //
-  // A "nothing to inject" guard used to live on this line, and its body was `writeState`. That made
-  // it a SECOND, PARTIAL state-commit site: it wrote `promptCount` and silently skipped every other
-  // field, because "nothing to say" was read as "nothing to record". Those are different questions,
-  // and conflating them cost FOUR rounds of one bug (both directions — see the flag's own comment).
+  // A "nothing to inject" guard whose body was `writeState` would be a SECOND, PARTIAL
+  // state-commit site: it would write `promptCount` and silently skip every other field, because
+  // "nothing to say" was read as "nothing to record". Those are different questions, and
+  // conflating them fails in both directions (see the flag's own comment).
   //
   // Everything below is a no-op on empty inputs: the budget loops iterate empty arrays, `ctx`
   // assembles to '', and the commit block marks nothing served. So falling through costs nothing
@@ -480,13 +479,12 @@ async function main() {
   /**
    * Build the lines WITH their ids — do not mark anything served yet.
    *
-   * This used to `injected.add(r.id)` here and `writeState` immediately, ~35 lines ABOVE the
-   * budget loop that drops lines. So a hit dropped for budget was recorded as SERVED: on a later
-   * prompt it rendered as `[recalled earlier: … ]` — a back-reference asserting the agent had seen
-   * a claim it was never shown, exactly the failure mode `hit.mjs`'s own header describes at
-   * length, with a false receipt attached. The identical rule was derived and written down 20
-   * lines earlier for the NUDGE ("Compute here, commit on delivery") and not applied to the common
-   * path in the same function — fix the census, not the instance.
+   * Marking an id served here (`injected.add(r.id)` plus an immediate `writeState`), ABOVE the
+   * budget loop that drops lines, would record a hit dropped for budget as SERVED: on a later
+   * prompt it would render as `[recalled earlier: … ]` — a back-reference asserting the agent had
+   * seen a claim it was never shown, exactly the failure mode `hit.mjs`'s own header describes at
+   * length, with a false receipt attached. The same rule holds for the NUDGE ("Compute here,
+   * commit on delivery") and for the common path alike.
    */
   const served = new Set(state.injectedIds);
   const seen = new Set(); // ids already emitted in THIS block — a pinned record must not print twice
@@ -496,9 +494,9 @@ async function main() {
     // it twice, and don't back-reference it either ("[recalled earlier]" about a line 3 rows up
     // reads as a bug).
     if (r.id && (served.has(r.id) || seen.has(r.id))) {
-      // renderBackRef carries the same record/doc + tool marker as renderLine — this line
-      // used to drop `isRecord` entirely and was the actual cause (two sessions called
-      // `record_get` on a document id after seeing only this compressed line).
+      // renderBackRef carries the same record/doc + tool marker as renderLine — dropping
+      // `isRecord` here would make an agent call `record_get` on a document id after seeing only
+      // this compressed line.
       if (!isFirstPrompt) lines.push({ text: renderBackRef(r), id: null });
       continue;
     }
@@ -508,11 +506,10 @@ async function main() {
 
   // Enumerated standing context FIRST, then the query-matched hits under their own header.
   //
-  // BUDGET — assemble to FIT, never `slice(0, CAP)` the finished string. Folding the enumeration
-  // into this hook merged two injections that each used to own a full 9500c budget into one that
-  // owns a single 9500c. MEASURED right after the merge: a real first prompt produced 9626c, so
-  // a blind tail-slice would have silently eaten the last recall hits AND cut a line mid-word —
-  // the enumeration would look fine while recall quietly lost its tail.
+  // BUDGET — assemble to FIT, never `slice(0, CAP)` the finished string. The enumeration and the
+  // hits share a single 9500c budget. MEASURED: a real first prompt produced 9626c, so a blind
+  // tail-slice would have silently eaten the last recall hits AND cut a line mid-word — the
+  // enumeration would look fine while recall quietly lost its tail.
   //
   // Priority is deliberate: the orient enumeration (now the resumed-thread episodic block only —
   // pinned lives in MEMORY.md) goes in first, then recall hits. Hits are ranked, so dropping from
@@ -520,10 +517,10 @@ async function main() {
   /**
    * FIT the orient block too — it was subtracted from the budget but never capped.
    *
-   * `budget = CONTEXT_CAP - orientPart.length` and then `orientPart` was concatenated
-   * unconditionally, so if the enumeration alone exceeded the cap, budget went negative, every hit
-   * and the nudge dropped, and `ctx` still shipped OVER the 10K additionalContext ceiling. Worst
-   * case shrank sharply once the pinned block moved to MEMORY.md (the enumeration is now ≤8 thread
+   * `budget = CONTEXT_CAP - orientPart.length` followed by an unconditional concatenation of
+   * `orientPart` would, if the enumeration alone exceeded the cap, drive budget negative, drop
+   * every hit and the nudge, and still ship `ctx` OVER the 10K additionalContext ceiling. The
+   * worst case is small because the pinned block lives in MEMORY.md (the enumeration is ≤8 thread
    * lines, not 12 pinned + 8 thread ≈ 10.4K), but the FIT loop stays: an uncapped title on a long
    * resumed thread can still overflow, and `report.mjs` still ships the `*** assemble-to-fit is
    * broken ***` detector for this exact condition — a monitor for a bug the code simply must not have.
@@ -567,9 +564,9 @@ async function main() {
   // The orphan block, on the same all-or-nothing terms and BELOW the session's own nudge. The two
   // are mutually exclusive TODAY (`ownPending === 0` at the compute site), but the ordering is
   // explicit rather than assumed: if that gate is ever relaxed, own-work-first must still hold, and
-  // it should be the code saying so, not a comment somewhere upstream. (The previous version of
-  // this comment asserted the exclusion was "by construction" while the predicate did not actually
-  // deliver it — an assertion is not a guarantee, which is why the order is written down here.)
+  // it should be the code saying so, not a comment somewhere upstream. (An assertion that the
+  // exclusion holds "by construction" is not a guarantee, which is why the order is written down
+  // here.)
   if (orphanLines.length) {
     const cost = orphanLines.join('\n').length + 1;
     if (cost <= budget) { nudgePart.push(...orphanLines, ''); budget -= cost + 1; }
@@ -611,108 +608,87 @@ async function main() {
    * The orientation boundary is CONSUMED here, and only here — and only if an orientation was
    * REALLY DELIVERED. This is the same test as the line above it, applied to the flag.
    *
-   * ONE BUG, FIXED TWICE ALREADY AND STILL LIVE. It was cleared on ENTRY (a network blip consumed the boundary and the
-   * session ran its whole life unoriented); that was fixed by moving the clear HERE, to "delivery".
-   * But "delivery" was read as *"we reached the delivery code"* — and the guard above only returns
-   * when hits AND orientLines AND nudge are ALL empty. So the interesting failure walks straight
-   * past it: enumeration fails (`orientLines = []`) while the search SUCCEEDS (`hits > 0`), nothing
-   * orientational is in `ctx`, and the flag cleared anyway. Never re-owed.
+   * Clearing the flag on ENTRY would let a network blip consume the boundary, and the session would
+   * run its whole life unoriented. "Delivery" means the orient RAN, not that the delivery code was
+   * reached: the nothing-to-inject guard only returns when hits AND orientLines AND nudge are ALL
+   * empty, so enumeration failing (`orientLines = []`) while the search SUCCEEDS (`hits > 0`) walks
+   * straight past it with nothing orientational in `ctx`. That must not clear the flag.
    *
    * `orientPart.length` (not `orientLines.length`) because a block computed and then dropped for
-   * budget was not delivered either; `!orientDropped` because a PARTIAL block means a resumed-thread
-   * record the agent needed may be the piece that fell off (pinned now lives in MEMORY.md and is
-   * deduped unconditionally above). The rule was already written four lines
-   * up for the enumerated ids — *"over-offering is recoverable, a false receipt is not"* — and
-   * `orientPending: false` with no orientation delivered is a false receipt about the most
-   * expensive thing this hook does.
+   * budget was not delivered either. Gate on DID THE ORIENT RUN (`orientOk`), not on whether it had
+   * anything to say, and not on whether all of it fit:
+   *
+   *   · An empty tier consumes the boundary, correctly: we owed an orientation and gave one.
+   *     Gating on `orientPart.length` would LATCH FOREVER for anyone whose pinned tier is
+   *     legitimately EMPTY (HTTP 200 `{data:[]}` → `renderOrientBlock([])` → no lines → no
+   *     `orientPart`): `isFirstPrompt` true on every prompt for the life of the session. That is
+   *     **every new user and every OSS adopter, and never a machine with pinned records already**,
+   *     so it cannot surface in local testing. It costs ~6x the REST calls, silently kills the
+   *     rolling-window tail (stop.mjs's entire output, still being stashed for nobody), drops
+   *     already-served hits without their `[recalled earlier]` line, and tells the 50th prompt of
+   *     the session it is "matching this session's kickoff". The cause is the `[]`-conflation —
+   *     "produced nothing because it FAILED" read as "produced nothing because it's EMPTY" — so it
+   *     is fixed at the SOURCE (enumerate.mjs returns null vs [], per project.mjs's contract)
+   *     rather than here, because a gate can only be as honest as the value it reads.
+   *
+   * RE-OWE ONLY WHAT A RETRY COULD PLAUSIBLY FIX: "still owed" is a retry claim, so gate it on
+   * retryability, or bound it. Of three conditions a retry helps with ONE:
+   *
+   *   pinned lookup failed (blip/500/timeout) — TRANSIENT. Retry helps. RE-OWE.
+   *   thread lookup failed on a resume        — NOT a blip: pinned just answered, so the endpoint
+   *                                             is up and a retry cannot fix it; it would only re-run
+   *                                             both lookups and re-inject the thread block. Logged
+   *                                             as a degradation instead. → enumerate.mjs
+   *   the block OVERFLOWED the budget         — DETERMINISTIC. The block is the same lines on every
+   *                                             prompt, so a retry drops the same lines and
+   *                                             re-injects BYTE-IDENTICAL output with the flag still
+   *                                             set. Forever. Gating on `!orientDropped` would re-owe
+   *                                             an orientation whose retry is a copy of itself — a
+   *                                             loop, not a re-owe.
+   *
+   * A partial block IS a real cost, and it is already paid correctly above: on a drop we mark
+   * NOTHING served, so every dropped record stays eligible and arrives later as an ordinary search
+   * hit with its full text. That is the recovery path. Re-running the orient is not — it
+   * re-renders the same block, drops the same lines, and eats the budget the hits needed. (Over-
+   * offering is recoverable; `orientPending: false` with no orientation delivered is a false
+   * receipt about the most expensive thing this hook does.)
    *
    * No runaway risk: a session with no credential returns long before this, and a failed
-   * enumeration now says so in the log (`enumerate lookup HTTP …`). The flag simply stays set and
-   * the next healthy prompt orients — which is precisely what the flag means.
+   * enumeration says so in the log (`enumerate lookup HTTP …`). The flag simply stays set and the
+   * next healthy prompt orients — which is precisely what the flag means.
    *
-   * AN EARLIER FIX'S gate was `orientPart.length && !orientDropped` — which
-   * LATCHED FOREVER for anyone whose pinned tier is legitimately EMPTY. HTTP 200 `{data:[]}` →
-   * `renderOrientBlock([], [])` → no lines → no `orientPart` → flag never cleared → `isFirstPrompt`
-   * true on every prompt, for the life of the session. Which is to say: **every new user and every
-   * OSS adopter, and never a machine with pinned records already**, which was
-   * structurally incapable of surfacing this. It cost ~6x the REST calls, and worse, it silently killed
-   * the rolling-window tail (stop.mjs's entire output, still being stashed for nobody), dropped
-   * already-served hits without their `[recalled earlier]` line, and told the 50th prompt of the
-   * session it was "matching this session's kickoff".
-   *
-   * The cause was the `[]`-conflation — "produced nothing because it FAILED" read as "produced
-   * nothing because it's EMPTY" — which is the founding story behind this discipline, inside the fix for it. Fixed at
-   * the SOURCE (enumerate.mjs now returns null vs [], per project.mjs's contract) rather than
-   * here, because a gate can only be as honest as the value it reads.
-   *
-   * So gate on DID THE ORIENT RUN, not on whether it had anything to say, and not on whether all
-   * of it fit. An empty tier consumes the boundary, correctly: we owed an orientation and gave one.
-   *
-   * RE-OWE ONLY WHAT A RETRY COULD PLAUSIBLY FIX — this is the rule the flag actually needs, the
-   * one every earlier fix missed: *"still owed" is a retry claim — gate it on retryability, or bound it*.
-   * This line is the worked example.
-   *
-   * The gate was `orientOk && !orientDropped`; MEASURED, that predicate
-   * re-owed the orientation on three conditions and a retry could only help with ONE of them:
-   *
-   *   pinned lookup failed (blip/500/timeout) — TRANSIENT. Retry helps. RE-OWE.      <- kept
-   *   thread lookup failed on a resume        — persistent shape-400; the retry re-injects the
-   *                                             pinned block and cannot fix it. → enumerate.mjs
-   *   the block OVERFLOWED the budget         — DETERMINISTIC. Proven with a stub: 12 pinned with
-   *                                             uncapped titles injects 9306c, drops the rest, and
-   *                                             prompt #2 re-injects BYTE-IDENTICAL output with the
-   *                                             flag still set. Forever. `!orientDropped` was
-   *                                             re-owing an orientation whose retry is a copy of
-   *                                             itself — a loop, not a re-owe.
-   *
-   * A partial block IS a real cost, and it is already paid correctly four lines up: on a drop we
-   * mark NOTHING served, so every dropped record stays eligible and arrives later as an ordinary
-   * search hit with its full text. That is the recovery path. Re-running the orient is not — it
-   * re-renders the same block, drops the same lines, and eats the budget the hits needed.
-   *
-   * THE PREDICATE WAS ALSO UNREACHABLE. `orientOk` itself is correct; what makes it usable here is
-   * that a `return` no longer sits 150 lines above it.
-   *
-   * The nothing-to-inject guard's body was `writeState`, which made it a second, partial commit
-   * site: `promptCount` written, these three fields skipped. That is accidentally correct for the
-   * two below — nothing delivered means nothing newly served and no nudge to retire — and WRONG
-   * here, because the three are not the same kind of receipt:
+   * The nothing-to-inject guard must not be a second, partial commit site (writing `promptCount`
+   * and skipping these three fields), because the three are not the same kind of receipt:
    *
    *   injectedIds / nudgedSig  — "did the agent SEE this content?"  → gate on DELIVERY
    *   orientPending            — "did we DO the orientation?"       → gate on the ACTION
    *
-   * An orient that ran and had nothing to say is a COMPLETED orientation with no content. A
-   * content-gated commit site cannot see it — so every earlier placement of this line within the
-   * content model answered the wrong question, in both directions (one cleared it when nothing
-   * ran; another kept it when nothing was there to run on).
-   *
-   * Hence: COMMIT, then decide whether to SPEAK. State is settled at exactly one site, and
-   * "nothing to inject" is what it always was — an OUTPUT decision, made below, after this.
+   * An orient that ran and had nothing to say is a COMPLETED orientation with no content, which a
+   * content-gated commit site cannot see. Hence: COMMIT, then decide whether to SPEAK. State is
+   * settled at exactly one site, and "nothing to inject" is an OUTPUT decision, made below, after
+   * this.
    */
   /**
-   * THE FIRST FIX AT THIS SITE THAT LATCHES OFF — i.e. the unrecoverable direction.
+   * THE FLAG IS WRITTEN BOTH WAYS, so recall can re-owe an orientation as well as consume one.
    *
-   * This was `if (isFirstPrompt && orientOk) state.orientPending = false`, so recall could only ever
-   * WRITE false. It never re-owed anything; the flag survived a failure only by not being touched.
-   * That works when the flag is already `true` — and silently loses the orientation when it is
-   * `undefined`, which is the PRE-FLAG path two lines up (`orientPending === undefined &&
-   * !promptCount`). Trace it: prompt #1 of a pre-flag session, orient FAILS → nothing writes the
-   * flag → but `promptCount` just became 1 → `!state.promptCount` is now false → `isFirstPrompt` is
-   * false FOREVER. The session never orients, and no other code path can rescue it, because this is
-   * the only line in the file that touches the flag.
+   * A flag recall could only ever WRITE false would never re-owe anything; it would survive a
+   * failure only by not being touched. That works when the flag is already `true` — and silently
+   * loses the orientation when it is `undefined`, which is the PRE-FLAG path (`orientPending ===
+   * undefined && !promptCount`). Trace it: prompt #1 of a pre-flag session, orient FAILS → nothing
+   * writes the flag → but `promptCount` just became 1 → `!state.promptCount` is now false →
+   * `isFirstPrompt` is false FOREVER. The session never orients, and no other code path can rescue
+   * it, because this is the only line in the file that touches the flag. (Measured: pre-flag
+   * state, enumeration 500, search up — prompt #1 and prompt #2 both leave `orientPending`
+   * `undefined`, with no orientation either time.)
    *
-   * MEASURED before the fix: pre-flag state, enumeration 500, search up — prompt #1 orientPending
-   * `undefined`, prompt #2 `undefined`, no orientation either time. Gone.
+   * Latching ON over-offers, which this file's own rule calls recoverable ("over-offering is
+   * recoverable, a false receipt is not"); latching OFF is the false receipt — the boundary
+   * consumed by a failure.
    *
-   * Every earlier fix at this site latched ON: over-offering, which this file's own rule calls
-   * recoverable ("over-offering is recoverable, a false receipt is not"). This one is the false
-   * receipt — the boundary consumed by a failure, the exact failure mode that rule exists to
-   * prevent, resurfacing through the one state value the fix never wrote.
-   *
-   * So WRITE THE VERDICT, both ways. `!orientOk` is the whole rule: the orient ran → consumed;
-   * it did not → still owed, and now recorded as `true` so the pre-flag path never has to infer it
-   * from a counter that has already moved. A flag that can only be cleared is not a flag, it is a
-   * default with extra steps.
+   * So WRITE THE VERDICT, both ways. `!orientOk` is the whole rule: the orient ran → consumed; it
+   * did not → still owed, and recorded as `true` so the pre-flag path never has to infer it from a
+   * counter that has already moved. A flag that can only be cleared is not a flag, it is a default
+   * with extra steps.
    */
   if (isFirstPrompt) state.orientPending = !orientOk;
   state.injectedIds = [...served].slice(-200);
@@ -724,8 +700,7 @@ async function main() {
   if (orphanLines.length) state.orphanSig = orphanSignature;
   /**
    * WRITE THE CLAIMS THIS TURN DECIDED ON. The decision — first claim vs renewal, who is eligible,
-   * how often — is `planClaimRenewals` in sweep.mjs, where it can be tested; three stacked comment
-   * blocks used to sit here restating rules the code beneath them no longer implemented on its own.
+   * how often — is `planClaimRenewals` in sweep.mjs, where it can be tested.
    *
    * What is local to this call site, and only this: the append goes to the ORPHAN's queue, not
    * ours. It is a fact about that queue's disposal and it must be visible to every other session's
@@ -758,9 +733,8 @@ async function main() {
   }
 
   // Nothing to say. State is already committed above, so this is purely about not emitting an
-  // empty block. (It also catches a case the old guard missed: an orient block computed and then
-  // dropped whole for budget left `orientLines.length > 0`, walked past the guard, and shipped
-  // `additionalContext: ''`.)
+  // empty block. (It also catches an orient block computed and then dropped whole for budget,
+  // which leaves `orientLines.length > 0` and would otherwise ship `additionalContext: ''`.)
   if (!ctx) {
     hlog('recall', `no hits (prompt #${state.promptCount}${isFirstPrompt ? ', ORIENT' : ''})`, sessionId);
     return;
@@ -782,16 +756,16 @@ async function main() {
  *
  * This was `main().catch(() => {})`. ANY throw anywhere in main() lands here, so a hook that dies
  * on line one and a hook that ran perfectly and had nothing to say produced the SAME observable:
- * nothing. That is the founding story behind this discipline (a recall hook read the wrong field name and no-op'd for a
+ * nothing. That is the founding story behind the receipt rule (a recall hook read the wrong field name and no-op'd for a
  * week) sitting on the outermost line of six different hooks — including, pointedly,
  * `recall-eval-worker.mjs`, whose own comment names a bug this construct swallowed.
  *
- * It was also invisible to this discipline's own ENFORCER: `receipt-lint-test.mjs` matched only `catch (e) {` and
+ * It was also invisible to the receipt rule's own ENFORCER: `receipt-lint-test.mjs` matched only `catch (e) {` and
  * consumed `(() => {})` as the optional binding, landing on `;` where it wanted `{`, and skipping
  * the block entirely. Six swallows, zero findings, green build. The lint reads arrow handlers now.
  *
  * Exit stays 0 and nothing rethrows: a hook must never break the user's turn. The log is the whole
- * remedy — it makes "dead" distinguishable from "quiet", which is all this discipline ever asks.
+ * remedy — it makes "dead" distinguishable from "quiet", which is all the receipt rule ever asks.
  */
 main().catch((e) => {
   try { hlog('recall', `hook CRASHED (${e?.code || e?.name || 'error'}) — this invocation did NOTHING: ${e?.message || e}`); }

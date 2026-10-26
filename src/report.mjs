@@ -5,7 +5,7 @@
  *   node report.mjs            # summary across every log generation + all session state
  *   node report.mjs --sessions # per-session detail
  *   node report.mjs --served   # which records/docs actually surface
- *   node report.mjs --compare  # does the record corpus agree with the queue? (cutover Phase A)
+ *   node report.mjs --compare  # does the record corpus agree with the queue?
  *
  * WHY THIS EXISTS. Every hook here is fail-open, so silence is ambiguous by construction —
  * `hooklog.mjs` exists to make "healthy and quiet" distinguishable from "dead". But a per-line
@@ -43,17 +43,15 @@ import { queueDir, stateDir, SID_DISPLAY_LEN } from './paths.mjs';
 const LOG = logPath();
 
 /**
- * The residual machinery MOVED to `residual.mjs` when the stale-queue sweep landed, and is re-exported here.
+ * The residual machinery lives in `residual.mjs` and is re-exported here.
  *
- * It was born in this file because the report was its only consumer. `sweep.mjs` is now the second,
- * and the two MUST enumerate the same population with the same refusals and the same staleness
- * clock — otherwise the ORPHANED tally below is a statement about a different system than the one
- * doing the flushing, which is the only thing that tally is for. Copying it into the sweep would
- * have been exactly the mistake this codebase already learned to avoid (the instance in front of
- * you is a SAMPLE — fix the census, do not re-wire one mechanism per site) in the branch whose
- * founding defect that is.
+ * This report and `sweep.mjs` are both consumers, and the two MUST enumerate the same population
+ * with the same refusals and the same staleness clock — otherwise the ORPHANED tally below is a
+ * statement about a different system than the one doing the flushing, which is the only thing that
+ * tally is for. Copying it into the sweep would drift (fix the census, do not re-wire one
+ * mechanism per site).
  *
- * `STALE_SESSION_MS` likewise moved into `config.mjs`'s SPEC — three consumers now share it (this
+ * `STALE_SESSION_MS` likewise lives in `config.mjs`'s SPEC — three consumers share it (this
  * report, the sweep's flush gate, the cross-session nudge's orphan gate) and it is the number an
  * operator is most likely to want to move.
  *
@@ -63,9 +61,9 @@ const LOG = logPath();
 export { residualFor, isStale, residualBySession, blindSpots, lastCensus };
 
 /**
- * `--compare` — DOES THE RECORD CORPUS AGREE WITH THE QUEUE? The Phase A exit criterion.
+ * `--compare` — DOES THE RECORD CORPUS AGREE WITH THE QUEUE?
  *
- * Dual-write means every proposal is written twice, and the phase is judged on whether the two
+ * Every proposal is written twice (queue + spool -> record), and this checks whether the two
  * stores hold the same set. "No errors in the log" is NOT that check: the failures worth catching
  * are the quiet ones — a spool append that returned false, a proposal parked after its retry
  * budget, a mapping that dropped a field. All of them look like a healthy log.
@@ -85,9 +83,9 @@ export { residualFor, isStale, residualBySession, blindSpots, lastCensus };
  *             is the gate working as designed (a secret it couldn't bound, a real customer/PII
  *             identifier). Reported separately so it is never confused
  *             with `unspooled` (a real dual-write bug) or counted toward `parked`'s "should be 0".
- *   unspooled — in the queue with no spool entry at all. The dual-write did not happen: either
- *             the spool append failed, or the entry predates Phase A (which is most of them at
- *             first, and is why the report separates candidates minted before the cutover).
+ *   unspooled — has an externalId but no spool entry at all. The dual-write did not happen: the
+ *             spool append failed. (Entries without an externalId predate the spool and are
+ *             counted apart.)
  *
  * `null` IS NOT `[]`. A lookup that could not RUN returns null, and counting that as "the
  * corpus holds nothing" would report every candidate as missing — a false alarm indistinguishable
@@ -100,8 +98,8 @@ export async function compareSession(sid, opts = {}) {
   const inQueue = new Map();
   let preCutover = 0;
   for (const c of q.all.values()) {
-    // No externalId => proposed before dual-write shipped. Out of scope for agreement (a later
-    // backfill is what gives those records), and counted separately so it cannot read as loss.
+    // No externalId => a legacy entry written before externalIds were minted. Out of scope for
+    // agreement (it has no key to match on), and counted separately so it cannot read as loss.
     if (!c.externalId) { preCutover++; continue; }
     inQueue.set(c.externalId, c);
   }
@@ -120,12 +118,10 @@ export async function compareSession(sid, opts = {}) {
   // externalId -> digest of what the STORE actually holds, recomputed from the returned payload.
   const inCorpus = new Map(rows.filter((r) => r.externalId).map((r) => [r.externalId, digestOf(r)]));
   /**
-   * externalId -> the RECORD's own `disposition` — the settle-side half of the agreement check
-   * (`dispose.mjs` was found to have had zero record writes on the settle path:
-   * `settle()`/`reopen()` existed, tested, unwired). The propose-side check above (content
-   * digest) was Phase A's whole exit criterion; it has nothing to say about whether a SETTLED
-   * candidate's disposition ever reached the record it was written to agree with in the first
-   * place. `undefined`/absent normalises to `'pending'`, matching the schema's own default.
+   * externalId -> the RECORD's own `disposition` — the settle-side half of the agreement check.
+   * The propose-side check above (content digest) has nothing to say about whether a SETTLED
+   * candidate's disposition ever reached its record. `undefined`/absent normalises to
+   * `'pending'`, matching the schema's own default.
    */
   const corpusDisposition = new Map(rows.filter((r) => r.externalId).map((r) => [r.externalId, r.disposition || 'pending']));
 
@@ -178,10 +174,11 @@ async function compare() {
   let dirUnreadable = false;
   try { files = fs.readdirSync(queueDir()).filter((f) => f.endsWith('.jsonl') && isReal(f)); }
   catch (e) {
-    // AN UNREADABLE DIRECTORY IS NOT AN EMPTY ONE. This fell through to `files = []`, so a fresh
-    // machine — or one EACCES — printed "AGREED: every post-cutover candidate is in both stores"
-    // over a corpus it had never looked at. The single most dangerous wrong answer this instrument
-    // can give, in the module whose header spends thirty lines refusing exactly that conflation.
+    // AN UNREADABLE DIRECTORY IS NOT AN EMPTY ONE. Falling through to `files = []` would let a
+    // fresh machine — or one EACCES — print "AGREED: every queue entry with an id is in both
+    // stores" over a corpus it had never looked at. The single most dangerous wrong answer this
+    // instrument can give, in the module whose header spends thirty lines refusing exactly that
+    // conflation.
     noteSkip('the ENTIRE queue dir', e);
     dirUnreadable = true;
   }
@@ -198,8 +195,8 @@ async function compare() {
   const orphanTotal = results.reduce((n, r) => n + (r.orphaned?.length || 0), 0);
   const unknown = results.filter((r) => r.state === 'unknown' || r.state.startsWith('unreadable'));
 
-  console.log(`DUAL-WRITE AGREEMENT — ${results.length} session(s)\n`);
-  console.log(`  queued since the cutover : ${sum('queued')}`);
+  console.log(`QUEUE / RECORD AGREEMENT — ${results.length} session(s)\n`);
+  console.log(`  queue entries with an id : ${sum('queued')}`);
   console.log(`  in the record corpus     : ${sum('agreed')}`);
   console.log(`  awaiting sync (owed)     : ${sum('owed', true)}   <- expected; the backlog draining`);
   console.log(`  quarantined (redaction gate) : ${sum('quarantined', true)}   <- expected; the gate working as designed, NOT a loss`);
@@ -208,7 +205,7 @@ async function compare() {
   console.log(`  content MISMATCH (row exists, claim differs): ${sum('divergent', true)}   <- should be 0`);
   console.log(`  SETTLE MISMATCH (file/record disposition disagree): ${sum('settleDivergent', true)}   <- should be 0 (dispose.mjs's record-side write)`);
   console.log(`  records with no queue row: ${orphanTotal}   <- should be 0`);
-  console.log(`  proposed BEFORE dual-write: ${sum('preCutover')}   <- out of scope; covered by a later backfill`);
+  console.log(`  queue entries with no id : ${sum('preCutover')}   <- not compared; they predate the spool`);
 
   const divergent = results.filter((r) => r.state === 'ok'
     && (r.missing.parked.length || r.missing.unspooled.length || r.missing.divergent.length
@@ -228,17 +225,15 @@ async function compare() {
     process.exitCode = 1;
   }
   if (dirUnreadable) {
-    // FIX: `dirUnreadable` was set above (on the queue dir itself failing to list — a
-    // DIFFERENT failure than any per-session `unknown` state) but never consulted here. With
-    // `files = []`, `results` is empty too, so BOTH `divergent` and `unknown` are vacuously
-    // empty and the old code fell straight through to printing "AGREED" over a corpus it never
-    // looked at — precisely the "missing is not broken" inversion this module's own header spends
-    // thirty lines refusing. Caught by ESLint's `no-unused-vars` during this package's first-ever lint
-    // pass over this source (it never had a config before landing under packages/).
+    // `dirUnreadable` is set above (on the queue dir itself failing to list — a DIFFERENT failure
+    // than any per-session `unknown` state) and MUST be consulted here. With `files = []`,
+    // `results` is empty too, so BOTH `divergent` and `unknown` are vacuously empty and falling
+    // straight through would print "AGREED" over a corpus it never looked at — precisely the
+    // "missing is not broken" inversion this module's own header spends thirty lines refusing.
     console.log('\n*** THE QUEUE DIRECTORY ITSELF COULD NOT BE LISTED — this run proves nothing; see the blind-spot ledger above ***');
     process.exitCode = 1;
   } else if (!divergent.length && !unknown.length) {
-    console.log('\n  AGREED — every post-cutover candidate is in both stores, or owed and still draining.');
+    console.log('\n  AGREED — every queue entry with an id is in both stores, or owed and still draining.');
   }
 }
 
@@ -272,11 +267,10 @@ function parseInjections(lines) {
 /**
  * Capture stats — filtered to REAL sessions, and that filter is the whole point.
  *
- * The first cut of this function counted raw log lines. It reported a 31% distiller failure rate;
- * three of the four failures were this repo's own drain test, which spawns a deliberately-broken
- * fake binary. A metric that counts its own test harness is not a metric — it is the third time
- * today a measurement here has been wrong in a way that looked authoritative (cf. the 97%-novel
- * lexical score, the "0 records" that was a swallowed HTTP 400). Extract the sid, then filter it.
+ * Counting raw log lines would report a 31% distiller failure rate when three of the four failures
+ * are this repo's own drain test, which spawns a deliberately-broken fake binary. A metric that
+ * counts its own test harness is not a metric — it looks authoritative and is wrong. Extract the
+ * sid, then filter it.
  */
 function parseCapture(lines) {
   const real = isReal;
@@ -304,14 +298,13 @@ export function foldQueues() {
     /**
      * THE FOLD IS `queue.read()`'s, NOT A SECOND COPY OF IT.
      *
-     * This used to re-implement the whole fold — positional ids, a `gone` set, the malformed-line
-     * rule — under a comment insisting "this fold must agree with that one or the report disagrees
-     * with the system it measures." It then did not: `reopen` landed in queue.mjs and this copy
-     * never got the arm, so after a `--reopen` the report counted the candidate as still gone AND
-     * still counted it under its old disposition. The comment asserting agreement is exactly what
-     * made the divergence invisible.
+     * Re-implementing the whole fold — positional ids, a `gone` set, the malformed-line rule —
+     * would have to agree with that one or the report disagrees with the system it measures, and
+     * a copy silently diverges: a `reopen` arm added to queue.mjs but not the copy would leave the
+     * report counting a reopened candidate as still gone AND under its old disposition. A comment
+     * asserting agreement is exactly what makes such a divergence invisible.
      *
-     * So the structural part — what is PENDING — now comes from the one fold that defines it. Only
+     * So the structural part — what is PENDING — comes from the one fold that defines it. Only
      * the per-disposition TALLIES are computed here, because they are event counts the fold does not
      * expose, and they are computed reopen-aware (a reopened candidate is no longer settled, so it
      * must stop counting under the disposition that was undone).
@@ -525,15 +518,11 @@ async function main() {
 // `main()` reads the whole log + spawns a full report — it must NOT fire on import. This file IS
 // imported for real (`tests/report-fold-queues-test.mjs` imports `foldQueues`,
 // `tests/compare-test.mjs` imports `compareSession`), which is exactly the case this guard exists
-// to handle — and exactly where the ORIGINAL `import.meta.url` version of it silently failed:
-// without this guard, `main()` fired during those test runs.
+// to handle — without this guard, `main()` would fire during those test runs.
 //
-// FOUND LIVE, against the real deployed build (same root cause as reap.mjs's own fix): despite
-// `bundle: false`, the build INLINES this file's entire source into
-// every file that imports from it — an importer's dist output carries a full copy of this
-// module, `// src/report.mjs` marker and all, not a real `import`. Once inlined, `import.meta.url`
-// for this code IS the importer's own URL, so `main()` fired on every real invocation of it —
-// confirmed live: a full stats report printed ahead of that importer's own output on every
-// run. `process.argv[1]`'s BASENAME survives inlining correctly (it reflects what script node was
-// actually told to run, which bundling can't change), so that is the real entry-point check.
+// The entry-point check compares the BASENAME of `process.argv[1]`, not `import.meta.url` (same
+// reason as reap.mjs): if a bundler inlines this module into an importer, `import.meta.url` is the
+// importer's own URL, so `main()` would fire on every real invocation of it and print a full stats
+// report ahead of that importer's own output. The BASENAME reflects what script node was actually
+// told to run, which bundling can't change.
 if (process.argv[1] && path.basename(process.argv[1]) === 'report.mjs') await main();

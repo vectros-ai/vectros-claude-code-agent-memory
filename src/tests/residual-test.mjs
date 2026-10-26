@@ -143,11 +143,11 @@ console.log('\n=== the enumeration cap ===');
     'no receipt — a truncation nobody can see reads as "that was all of it"');
   check('and it reports the unread remainder', /7 state file\(s\) unread/.test(log), log.slice(-300));
   /**
-   * IT MUST NOT DIAGNOSE ANOTHER FILE'S INVARIANT. The line this replaced asserted "the phantom
-   * exclusion in stop.mjs is no longer holding" and prescribed `reap.mjs`. Both were false on the
-   * machine where it fired daily for a week: the exclusion was holding perfectly (that is what
-   * produced the phantoms), and the reaper was already running at its per-run maximum. A receipt
-   * that names a cause it cannot observe sends its reader to audit a healthy mechanism.
+   * IT MUST NOT DIAGNOSE ANOTHER FILE'S INVARIANT. A line asserting "the phantom exclusion in
+   * stop.mjs is not holding" and prescribing `reap.mjs` would be false where it fires daily: the
+   * exclusion holds perfectly (that is what produces the phantoms), and the reaper may already be
+   * running at its per-run maximum. A receipt that names a cause it cannot observe sends its
+   * reader to audit a healthy mechanism.
    */
   check('it does NOT accuse stop.mjs of a broken invariant', !/stop\.mjs/.test(log), log.slice(-300));
   check('...nor prescribe a reap that does not address it', !/reap\.mjs/.test(log), log.slice(-300));
@@ -177,11 +177,11 @@ console.log('\n=== the cap counts MEASURABLE sessions, not state files ===');
   const PHANTOMS = 400;   // same shape as production's: {orientPending, orientSource, orientedAt}
   /**
    * REAL SESSIONS ARE WRITTEN FIRST, PHANTOMS SECOND — so the phantoms are NEWER by mtime. Do not
-   * swap this: it is the whole point, and the first draft had it backwards.
+   * swap this: it is the whole point.
    *
    * The enumeration sorts mtime-DESCENDING, so with the real files written last they land at the
-   * front and survive even a file-based cap. That made the headline assertion pass under a
-   * sabotage that restored the original defect. Production's ordering is this one: phantoms arrive
+   * front and survive even a file-based cap. That would make the headline assertion pass under a
+   * sabotage that restored the defect. Production's ordering is this one: phantoms arrive
    * continuously (~368/day) while a real session goes idle the moment its work ends, so real
    * sessions sink and are exactly what a file cap evicts.
    */

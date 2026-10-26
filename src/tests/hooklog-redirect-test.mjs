@@ -1,8 +1,8 @@
 // hooklog.mjs must never be the reason a test suite corrupts the PRODUCTION hooks.log.
 //
-// RED-PROOF FOR THE ACTUAL BUG: before this fix, `hlog()` had no way to be told to write anywhere
-// but `~/.claude/vectros-memory/hooks.log`, full stop — so `sweep-test.mjs` forcing a "marker
-// append FAILED" receipt, or `nudge-budget-test.mjs` forcing a "NUDGE DROPPED" receipt, landed
+// RED-PROOF FOR THE ACTUAL BUG: an `hlog()` with no way to be told to write anywhere but
+// `~/.claude/vectros-memory/hooks.log`, full stop, would let `sweep-test.mjs` forcing a "marker
+// append FAILED" receipt, or `nudge-budget-test.mjs` forcing a "NUDGE DROPPED" receipt, land
 // those lines in the SAME file an operator greps at 2am for a real incident. This file proves (a)
 // the default is unchanged for every real session (no env var set), and (b) `VECTROS_HOOKLOG_PATH`
 // actually redirects writes AWAY from the default path — not merely that a function returns a

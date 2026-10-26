@@ -260,7 +260,9 @@ Every tunable the loop uses (retrieval window sizes, debounce timers, budget cap
 (`VECTROS_MEM_<KEY>`) — overrides in force are logged to `hooks.log` as `config applied: KEY=value(source)`.
 The content gate's model call has its own time budget, `VECTROS_MEM_CLASSIFIER_TIMEOUT_MS`
 (default 25000), and uses the model named by `VECTROS_MEM_CLASSIFIER_MODEL` (default: the capture
-model).
+model). The `MEMORY.md` projection waits at most `VECTROS_MEM_PROJECT_GIT_TIMEOUT_MS` (default 5000, range
+10 to 120000) for each git call (finding the repository root, listing its working trees); a call that outlasts it
+fails, and with a directory list set the projection then does not write.
 
 ## Keeping a project out of recall and capture
 

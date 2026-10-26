@@ -85,9 +85,9 @@ const ENV = { ...process.env, VECTROS_API_KEY: 'ssk_test_fake_for_dispose_test',
  * answer a request the child makes while it's running: every fetch times out and every call looks
  * like "records unreachable" — exactly the trap `orient-boundary-test.mjs` already hit and
  * documented (its own header: *"`spawnSync` cannot work here... every fetch times out... while
- * appearing to pass"*). Measured directly on this branch: a first draft using `spawnSync` here
- * produced dozens of spurious "RECORDS UNREACHABLE" failures, each after the FULL
- * `CANDIDATE_TIMEOUT_MS` wait, mid-suite — not a clean failure, a slow, confusing one.
+ * appearing to pass"*). Using `spawnSync` here produces dozens of spurious "RECORDS UNREACHABLE"
+ * failures, each after the FULL `CANDIDATE_TIMEOUT_MS` wait, mid-suite — not a clean failure, a
+ * slow, confusing one.
  */
 function spawnAsync(argv, opts) {
   return new Promise((resolve) => {
@@ -135,7 +135,7 @@ function seedCandidate(sid, { title, body = 'b', kind = 'observation', dest = 'm
   if (sourceRef) fields.sourceRef = sourceRef;
   if (revises) fields.revises = revises;
   server.seed('candidate', fields);
-  // The file-side backup entry. `dispose.mjs` no longer reads this for addressing or verification
+  // The file-side backup entry. `dispose.mjs` does not read this for addressing or verification
   // — only `backupToFile` reads it, to resolve this candidate's LOCAL positional id when it writes
   // a settle/reopen backup event. A plain 'propose' is enough regardless of whether this candidate
   // is conceptually a revision — the file's own revise/supersede bookkeeping is not something
@@ -211,18 +211,16 @@ console.log(`    c2 pending? ${isPending(SID, 'c2')}  (MUST be true — the good
 check('c2 was NOT settled by the mixed batch', isPending(SID, 'c2'));
 
 console.log('\n=== 4. CORRESPONDENCE / RECENCY: an OLD, unrelated record must be REFUSED ===');
-// THIS FILE USED TO ASSERT THE OPPOSITE, and that is the point. It settled c1 — titled
-// "stored path" — with a real, unrelated, pre-existing record. Unrelated content, exit 0,
-// "expect false", called a pass. This very line is the proof that dispose
-// verified EXISTENCE, not CORRESPONDENCE — and a real uuid is precisely the mistake to expect,
-// because recall injects real record uuids into the agent's context on every hit. The gate now
-// checks id-echo, typeName, and recency (a stored candidate is a record you JUST wrote); an old
-// unrelated record fails the last one.
+// SETTLING c1 — titled "stored path" — with a real, unrelated, pre-existing record (unrelated
+// content, exit 0) would show that dispose verified EXISTENCE, not CORRESPONDENCE — and a real
+// uuid is precisely the mistake to expect, because recall injects real record uuids into the
+// agent's context on every hit. The gate checks id-echo, typeName, and recency (a stored
+// candidate is a record you JUST wrote); an old unrelated record fails the last one.
 await run('c1=stored:<a real but OLD, unrelated record>', [`c1=stored:${OLD_MEMORY_RECORD}`], 1);
 check('an old unrelated record does NOT settle a candidate', isPending(SID, 'c1'));
 
-// THE ACCEPTANCE CASE — absent from every prior version of this suite (only `stored:`'s REFUSALS
-// were ever exercised; the one path where it actually succeeds never was). A record that IS a
+// THE ACCEPTANCE CASE — the one path where `stored:` actually succeeds, as opposed to the
+// REFUSALS exercised above. A record that IS a
 // `memory`, freshly written, id-echoing correctly: every gate should pass. A FRESH candidate, not
 // c1 — c1 stays pending throughout this file (asserted at the end) since every case that touches
 // it is a refusal by design.
@@ -374,8 +372,8 @@ console.log('\n=== 12. documented: CONTAINMENT — bounded to the worktree ROOT,
  * A test that only checked `../../../etc/hosts` would have passed against both.
  *
  * All of this runs against FAKE_REPO (built at the top of this file), never against this repo's
- * own real tree — the earlier version of this suite ran directly against whatever real repo
- * happened to check it out, which is exactly the portability bug the fixture exists to remove.
+ * own real tree — running against whatever real repo happens to check it out is exactly the
+ * portability bug the fixture exists to remove.
  */
 {
   // `run()` executes with cwd = REPO by default; `runFrom()` drives the cwd-sensitive cases against
@@ -434,8 +432,8 @@ console.log('\n=== 12. documented: CONTAINMENT — bounded to the worktree ROOT,
 
     /**
      * A TYPO MUST NOT BE DIAGNOSED AS A SIBLING WORKTREE. With two bases one can escape the tree
-     * while the other is inside-and-missing; the escape used to win the diagnosis, so a plain typo
-     * was answered with "you are probably pointing at a sibling worktree". The agent believes that
+     * while the other is inside-and-missing; if the escape won the diagnosis, a plain typo would
+     * be answered with "you are probably pointing at a sibling worktree". The agent believes that
      * and goes looking for the wrong problem.
      */
     const G = seedCandidate(SID, { title: 'containment: typo inside the tree, from a subdirectory' });
@@ -455,10 +453,9 @@ console.log('\n=== 12. documented: CONTAINMENT — bounded to the worktree ROOT,
     const outH = (rH.stdout || '') + (rH.stderr || '');
     check('a cwd-relative citation still verifies', rH.status === 0, `exit=${rH.status} ${outH.slice(0, 200)}`);
     /**
-     * ASSERT THE RECORD, NOT STDOUT — the first version of this check read `rH.stdout` while its
-     * own name said "recorded". `resolved` is what the RECORD carries now (the primary write since
-     * the move to record-backed storage); the local file backup mirrors it but is no longer the
-     * thing that matters here.
+     * ASSERT THE RECORD, NOT STDOUT — a check named "recorded" must not read `rH.stdout`.
+     * `resolved` is what the RECORD carries (the primary write); the local file backup mirrors it
+     * but is not the thing that matters here.
      */
     const recH = [...server.store.values()].find((r) => r.typeName === 'candidate' && r.payload.title === 'containment: the resolved path is PERSISTED, not just printed');
     check('the RECORD carries the resolved root-relative path', recH.payload.resolved === 'CLAUDE.md',
@@ -482,12 +479,12 @@ console.log('\n=== 12. documented: CONTAINMENT — bounded to the worktree ROOT,
   fs.writeFileSync(path.join(sibling, 'PROBE.md'), '# probe');
   try {
     /**
-     * ONE `../`, NOT TWO — and the first draft used two, which made this test VACUOUS: with
-     * `../../` both bases land outside the tree, so the OLD logic diagnosed it correctly too and
-     * the RED-proof stayed green. The defect only appears when one base is inside and the other
-     * escapes: from `platform/`, `../X` resolves to `<repo>/X` (inside, missing) under the cwd
-     * base and to `<sibling>/X` (outside, EXISTING) under the root base. That is the shape the fix
-     * exists for, and it is the shape a real sibling-repo citation actually has.
+     * ONE `../`, NOT TWO — two would make this test VACUOUS: with `../../` both bases land outside
+     * the tree, so a naive diagnosis is correct too and the RED-proof stays green. The defect only
+     * appears when one base is inside and the other escapes: from `platform/`, `../X` resolves to
+     * `<repo>/X` (inside, missing) under the cwd base and to `<sibling>/X` (outside, EXISTING)
+     * under the root base. That is the shape the gate exists for, and it is the shape a real
+     * sibling-repo citation actually has.
      */
     const rS = await runFrom(sub, [`${S}=documented:../${path.basename(sibling)}/PROBE.md`]);
     const outS = (rS.stdout || '') + (rS.stderr || '');
@@ -525,10 +522,9 @@ console.log('\n=== 12. documented: CONTAINMENT — bounded to the worktree ROOT,
 console.log('\n=== a PLAIN git project (no docs/development/CONVENTIONS.md) is a root too ===');
 {
   /**
-   * A project outside the one this package was written in has no CONVENTIONS.md. The root used to be
-   * found only by that landmark, so every path citation from such a project was refused with "cannot
-   * locate the worktree root" — in every project that does not keep that file, from the directory the agent
-   * run from. The git top level is the root there. The refusals must survive the change: a citation
+   * A project outside the one this package was written in has no CONVENTIONS.md. A root found only
+   * by that landmark would refuse every path citation from such a project with "cannot locate the
+   * worktree root". The git top level is the root there. The refusals must survive: a citation
    * outside the project, and a parent directory holding several checkouts, still find no gate to
    * pass through.
    */
@@ -720,14 +716,13 @@ console.log('\n=== `resolved` is recorded on EVERY disposition path, not just `d
 
 console.log('\n=== RED-PROOF: --list renders candidate fields through field(), not raw ===');
 {
-  // Same bug class as hit.mjs's untrusted metadata (found in the same public-readiness pass): a candidate's
-  // title/body/kind/sourceRef is model-authored with no length bound, and this CLI's --list used
-  // to print it verbatim. A raw newline in `title` would visually splice one candidate's listing
-  // into the next; an unbounded body would flood the terminal on a pathological proposal.
-  // `body` already had a partial defense before this fix (`.replace(/\s+/g, ' ')` collapsed its
-  // whitespace, just without a length cap) — so it's not a useful red-test target. `title`/`kind`/
-  // `dest`/`sourceRef` had NONE at all (raw template interpolation), which is the actual gap this
-  // fix closes. Target those.
+  // Same bug class as hit.mjs's untrusted metadata: a candidate's title/body/kind/sourceRef is
+  // model-authored with no length bound, so this CLI's --list must not print it verbatim. A raw
+  // newline in `title` would visually splice one candidate's listing into the next; an unbounded
+  // body would flood the terminal on a pathological proposal. `body` has a partial defense of its
+  // own (`.replace(/\s+/g, ' ')` collapses its whitespace) — so it's not a useful red-test target.
+  // `title`/`kind`/`dest`/`sourceRef` have NONE (raw template interpolation without the bound), so
+  // target those.
   const DIRTY_SID = 'dispose-test-dirty-0001';
   const DIRTY_QP = queueFor(DIRTY_SID);
   try { fs.unlinkSync(DIRTY_QP); } catch {}
@@ -750,11 +745,11 @@ console.log('\n=== RED-PROOF: --list renders candidate fields through field(), n
 console.log('\n=== PAGINATION: a corpus larger than one page is not silently truncated ===');
 {
   /**
-   * The candidate client used to send `cursor`, but `/v1/records/lookup` calls the resume field
-   * `startFrom` and rejects unknown keys — so every lookup past page 1 400'd. This fake server's
-   * own `nextCursor` used to be hardcoded `null` (see fake-records-server.mjs), so no test running
-   * through the REAL subprocess could ever reach page 2 to notice the wrong field name — the fake
-   * itself made the defect invisible. Force a genuine multi-page walk through the real subprocess +
+   * `/v1/records/lookup` calls the resume field `startFrom` and rejects unknown keys, so a client
+   * sending `cursor` would 400 on every lookup past page 1. A fake server whose own `nextCursor`
+   * is hardcoded `null` (see fake-records-server.mjs) would let no test through the REAL
+   * subprocess ever reach page 2 to notice the wrong field name — the fake itself would make the
+   * defect invisible. Force a genuine multi-page walk through the real subprocess +
    * real HTTP fake, the same code path a live corpus over `CANDIDATE_PAGE_LIMIT` takes.
    */
   const PAGE_SID = 'dispose-test-pagination-0001';

@@ -98,20 +98,18 @@ export const SWEEP_MARKER = () => sweepMarker();
  * FAIL-OPEN TOWARD SWEEPING, and be honest about what that costs: an unreadable marker costing NO
  * sweeps is the tail loss returning silently, which is worse than an extra scan — but the scan is
  * NOT free. It parses every stale session's transcript that is not already swept (MEASURED: 1695 ms
- * / 155 MB against a 10-session backlog; ~10 ms once those are swept, via `skipSwept`). This comment
- * used to say "a readdir plus a stat per session", which was never true and was one of three places
- * asserting it. ENOENT is the normal first-run case and stays quiet; anything else leaves a receipt.
+ * / 155 MB against a 10-session backlog; ~10 ms once those are swept, via `skipSwept`). It is not
+ * merely "a readdir plus a stat per session". ENOENT is the normal first-run case and stays quiet;
+ * anything else leaves a receipt.
  *
- * THE `stat` SEAM IS THERE SO THE FAIL-OPEN BRANCH CAN BE TESTED AT ALL, and the reason is worth
- * recording because the first draft got it wrong. The test tried to produce an unreadable marker by
- * pointing at a DIRECTORY — but `statSync` on a directory SUCCEEDS and returns a usable mtime, so
- * the check was asserting a premise that does not hold. MEASURED on a Windows 11 dev machine (Node
+ * THE `stat` SEAM IS THERE SO THE FAIL-OPEN BRANCH CAN BE TESTED AT ALL. An unreadable marker
+ * cannot be produced by pointing at a DIRECTORY: `statSync` on a directory SUCCEEDS and returns a
+ * usable mtime. MEASURED on a Windows 11 dev machine (Node
  * via node:fs): a directory stats fine; a file used as a path component gives ENOENT (the quiet
  * branch); the only non-ENOENT throw reachable from `node:fs` is a NUL-byte path, which is a
  * synthetic `TypeError`, not an operator's failure.
  *
- * Rather than assert a platform behaviour nobody has measured — the mistake `lock.mjs`'s header
- * documents at length, where a "refutation" cited a test that contained no such measurement — the
+ * Rather than assert a platform behaviour nobody has measured (see `lock.mjs`'s header), the
  * reader is injectable and the test drives the branch directly. This tests the LOGIC, which is
  * ours; it does not claim to know which real-world conditions reach it.
  */
@@ -143,8 +141,8 @@ export function markSweepRun(marker, nowMs) {
     // than intended. But SAY SO, and do not undersell it: a
     // permanently unwritable marker means every Stop rescans — and a rescan is up to ~1.7s of
     // transcript parsing while a backlog exists, at ~2 Stops/min. An operator should be able to find
-    // that in the log rather than in a CPU graph. (This used to say the work was "stats-only until
-    // something is genuinely eligible"; it named the right symptom and the wrong magnitude.)
+    // that in the log rather than in a CPU graph. (The work is not "stats-only until something is
+    // genuinely eligible"; the magnitude is a transcript parse.)
     hlog('sweep', `could NOT write the debounce marker (${e.code || e.message}) at ${marker} — the sweep will rescan on every Stop until this is fixed`);
     return false;
   }
@@ -196,9 +194,7 @@ export function selectFlushable(rows, { nowMs: _nowMs, staleMs, floorChars, curr
      * demonstrably at or above the floor is refused.
      *
      * `residualBySession` always populates the field, so this is not reachable from the shipped
-     * producer today — and the justification originally written here (that a `withResidual: false`
-     * flag made `residual: null` a real produced value) is GONE, because that flag was deleted when
-     * its only consumer moved to a different index. The negation stays on its own merits: this
+     * producer. The negation stays on its own merits: this
      * function is exported, tested standalone, and is THE spend gate, so it must refuse anything not
      * demonstrably above the floor rather than rely on one caller always populating a field. Gate 2
      * already null-checks explicitly (`isStale`); this is the same care, applied here too.
@@ -263,11 +259,9 @@ export { HANDED_TTL_MS };
  *   · The throttle keeps this off the prompt path's write budget: renewal fires per PROMPT, and
  *     unthrottled it appends a line per prompt to a foreign queue that is fully re-parsed per
  *     prompt, for as long as the hold lasts. A quarter-TTL fires 3 renewals before expiry (30/60/90
- *     min against a 120 min TTL — the first draft said ~4, counting the expiry tick itself) before
- *     expiry while cutting the write rate to ~1 per 30 min per HELD queue instead of one per
- *     prompt. BOUNDED, not zero — an 8h hold at the 2h default still writes ~16 `handed`
- *     events. The first draft said "zero", which is the kind of round number that stops
- *     anyone checking it.
+ *     min against a 120 min TTL; the expiry tick itself is not a renewal) while cutting the write
+ *     rate to ~1 per 30 min per HELD queue instead of one per prompt. BOUNDED, not zero — an 8h
+ *     hold at the 2h default still writes ~16 `handed` events.
  *
  * Returns `[{ sid, why }]`; the caller does the appending and the receipts.
  */
@@ -325,15 +319,14 @@ export function orphanedPending(nowMs, { staleMs, stateDir, queueDir, forSid = n
    * The right fix is not a faster scan, it is the right INDEX. This function's question is "who has
    * UNSETTLED CANDIDATES?", and a candidate lives in a queue file. A session with no queue file
    * cannot have one — no filtering required, it simply is not in the population. Measured:
-   * **9 queue files against 2,337 state files** (the state dir GROWS continuously and was
-   * unreaped until reap.mjs landed — different counts elsewhere in this tree reflect different
-   * points in that growth, not a contradiction. The RATIO is the durable fact
-   * and it only widens). The state read then happens only for
+   * **9 queue files against 2,337 state files** (the state dir grows continuously and `reap.mjs`
+   * prunes it — different counts elsewhere in this tree reflect different points in that growth,
+   * not a contradiction. The RATIO is the durable fact). The state read then happens only for
    * those 9, to get `lastStopAt`.
    *
    * So: enumerate queues, fold each, and read state only for the survivors. The transcript is never
-   * touched at all — this consumer has no use for residual, which is the fact the first version
-   * spent 218 MB failing to notice.
+   * touched at all — this consumer has no use for residual, and parsing transcripts for it would
+   * spend 218 MB for nothing.
    *
    * The two gates below are this function's CONTRACT and stay explicit rather than being implied by
    * the enumeration: a live session's pending is never handed to another agent, and only a session
@@ -346,8 +339,7 @@ export function orphanedPending(nowMs, { staleMs, stateDir, queueDir, forSid = n
     // exactly the "no nudge looks like no candidates" conflation the queue receipts exist to stop.
     // `hlog`, NOT the blind-spot ledger. `blindSpots` lives in residual.mjs and its ONLY printer is
     // report.mjs; this runs inside recall.mjs, a per-prompt process that never prints it and then
-    // exits. A receipt written where nobody reads it is silence with extra steps — and the comment
-    // here used to claim the opposite.
+    // exits. A receipt written where nobody reads it is silence with extra steps.
     if (q.state === 'corrupt') { hlog('sweep', `orphan scan: queue ${String(sid).slice(0, SID_DISPLAY_LEN)} UNREADABLE — cannot tell whether it has pending candidates; not surfacing it`); continue; }
     if (!q.pending.length) continue;
     if (q.sweptAt === null || q.sweptAt === undefined) continue; // never flushed — not ours to hand on
@@ -365,11 +357,10 @@ export function orphanedPending(nowMs, { staleMs, stateDir, queueDir, forSid = n
      * claim with a falsy `toSid` as no claim at all — the gate is the enforcement point, so a
      * malformed claim must fail CLOSED (claimed-by-unknown) rather than open.
      *
-     * "MINE" IS AN EXPLICIT PREDICATE, not `handedTo !== forSid`. That expression was the fix's own
-     * comment claiming it "does the right thing for `null`" — and it does not: `forSid` DEFAULTS to
-     * `null` two dozen lines up, so an unknown holder and an unknown asker compare EQUAL and the
-     * claimed queue is offered. Exactly the fail-open the block says it closes, asserted about the
-     * code rather than about today's single caller. A claim is ours only when both sides are real
+     * "MINE" IS AN EXPLICIT PREDICATE, not `handedTo !== forSid`. That expression does NOT "do the
+     * right thing for `null`": `forSid` DEFAULTS to `null` in the signature, so an unknown holder
+     * and an unknown asker compare EQUAL and the claimed queue is offered. Exactly the fail-open
+     * the block closes, and it must hold for the code, not just for today's single caller. A claim is ours only when both sides are real
      * and identical; every other combination is somebody else's.
      */
     const heldByUs = typeof forSid === 'string' && forSid !== '' && q.handedTo === forSid;
@@ -437,7 +428,7 @@ export { isReal };
  * which gates the spawn (the only billed thing here). At rest — the overwhelmingly common case,
  * including every phantom Stop — this costs ONE `statSync` and returns.
  *
- * THE SCAN IS NOT "STATS-ONLY", and three comments in this file used to say it was. It reads and
+ * THE SCAN IS NOT "STATS-ONLY". It reads and
  * JSON-parses the transcript of every stale session that is not already swept, to compute the
  * residual the floor gate needs. MEASURED: 1695 ms / 155 MB against a 10-session backlog; ~10 ms
  * once those sessions carry a `swept` marker (`skipSwept` skips them before the parse). It runs at
@@ -502,14 +493,13 @@ export function runSweep(currentSid, nowMs, opts = {}) {
   const stats = {};
   const rows = _enumerate(nowMs, { ...(d.enumDeps || {}), minAgeMs: staleMs, skipSwept: true, stats, isExcluded: _isExcluded });
   // `deferred` is deliberately NOT taken from here — see `reallyDeferred` below. The cap-shaped
-  // slice is right only if the loop consumes the head in order, and it no longer does.
+  // slice is right only if the loop consumes the head in order, and it does not.
   const { eligible, skipped } = selectFlushable(rows, { nowMs, staleMs, floorChars, currentSid, max });
 
   /**
-   * HOISTED ABOVE THE BRANCH so both receipts can carry it. It was computed inside the
-   * `!eligible.length` arm only, so a scan that flushed one session and dropped three as unreadable
-   * reported the drops NOWHERE — the exact silence the counter was added to break, surviving in the
-   * busier half of the function.
+   * COMPUTED ABOVE THE BRANCH so both receipts can carry it. Computing it inside the
+   * `!eligible.length` arm only would leave a scan that flushed one session and dropped three as
+   * unreadable reporting the drops NOWHERE — the exact silence the counter exists to break.
    */
   const unseen = blindSpots.length;
 
@@ -517,21 +507,19 @@ export function runSweep(currentSid, nowMs, opts = {}) {
     /**
      * SAY WHAT YOU DID, INCLUDING NOTHING, and say WHICH nothing.
      *
-     * THE WORDING IS NARROWER THAN IT WAS, ON PURPOSE. It used to promise it could distinguish five
-     * cases by tallying `skipped` reasons — and then `minAgeMs` was pushed into the enumerator, so
-     * rows for live sessions stopped EXISTING and gates 1 and 2 had nothing left to skip. The tally
-     * kept its confident shape while two of its five categories quietly became unreachable, and an
-     * empty `skipped` collapsed to the literal "no sessions enumerated" — which then meant four
-     * different things at once. A receipt that cannot distinguish its cases is the ambiguity the log
-     * exists to remove; one that CLAIMS to and cannot is worse, because it is believed.
+     * THE WORDING IS NARROW ON PURPOSE. `minAgeMs` is pushed into the enumerator, so rows for live
+     * sessions never EXIST and gates 1 and 2 have nothing to skip; a tally promising to
+     * distinguish five cases would keep a confident shape while two of its categories were
+     * unreachable, and an empty `skipped` would collapse to a literal "no sessions enumerated" that
+     * means four different things at once. A receipt that cannot distinguish its cases is the
+     * ambiguity the log exists to remove; one that CLAIMS to and cannot is worse, because it is
+     * believed.
      *
-     * So it now says exactly what it knows: how many STALE sessions were enumerated (live ones are
+     * So it says exactly what it knows: how many STALE sessions were enumerated (live ones are
      * filtered before enumeration and are deliberately invisible here), and the gate tally among
      * those, plus a count of what could not be READ at all — see the `unseen` receipt below, which
-     * is computed here rather than deferred to `report.mjs`. (This sentence used to say unreadable
-     * inputs "surface in report.mjs's blind-spot ledger". They do not: `blindSpots` is a per-process
-     * array and this process exits. The correction was added 26 lines below while the claim itself
-     * survived up here — a fix landing next to its own refuted premise.)
+     * is computed here rather than deferred to `report.mjs`: `blindSpots` is a per-process array
+     * and this process exits, so nothing recorded in it reaches report.mjs's blind-spot ledger.
      * Quiet but not silent: at most one line per `SWEEP_DEBOUNCE_MS`.
      */
     const by = {};
@@ -539,8 +527,8 @@ export function runSweep(currentSid, nowMs, opts = {}) {
     /**
      * THE STEADY-STATE CAUSE IS `skippedSwept`, NOT AN EMPTY GATE TALLY. Once the backlog drains,
      * every stale session is dropped by `skipSwept` before `selectFlushable` sees it, so `skipped`
-     * is empty — and the fallback string used to assert "no session has been idle long enough",
-     * which is false for every one of them. Report the drop count first; it is the answer nearly
+     * is empty — so a fallback string asserting "no session has been idle long enough" would be
+     * false for every one of them. Report the drop count first; it is the answer nearly
      * every time this line fires in a healthy system.
      */
     const parts = [];
@@ -551,16 +539,15 @@ export function runSweep(currentSid, nowMs, opts = {}) {
     /**
      * AND SAY WHEN WE COULD NOT SEE — HERE, because nowhere else will.
      *
-     * Two corrections to what this comment used to claim, both found by checking it against the
-     * enumerator instead of against itself:
+     * Two facts about the enumerator:
      *
-     *   · NOT "the other three drops". `corrupt queue` and `total < offset` DO call `noteSkip`;
+     *   · NOT every drop is a blind spot. `corrupt queue` and `total < offset` DO call `noteSkip`;
      *     `if (!s.transcriptPath) continue` (residual.mjs) does not, deliberately — it is the
-     *     phantom exclusion, ~2,500 rows when measured (it GROWS — see residual.mjs), and a receipt per phantom is noise, not
-     *     signal. It is not a blind spot: those sessions have nothing to measure BY CONSTRUCTION.
-     *   · "they surface in report.mjs's blind-spot ledger" was FALSE HERE. `blindSpots` is a
+     *     phantom exclusion, ~2,500 rows when measured (it grows — see residual.mjs), and a receipt
+     *     per phantom is noise, not signal. Those sessions have nothing to measure BY CONSTRUCTION.
+     *   · The blind-spot ledger does NOT surface in report.mjs from HERE. `blindSpots` is a
      *     per-process in-memory array; the sweep runs inside the Stop hook, which exits. Nothing it
-     *     records ever reaches `report.mjs`, so pointing the operator there pointed at silence.
+     *     records ever reaches `report.mjs`, so pointing the operator there would point at silence.
      *
      * So print the count in the receipt that is actually emitted. Count, not contents — the ledger
      * carries session ids and paths, and this line lands in a shared log.
@@ -599,12 +586,12 @@ export function runSweep(currentSid, nowMs, opts = {}) {
      * the session, and `claim` would return EEXIST against it until the disk was wiped.
      */
     /**
-     * ONE staleness threshold for both callers — `lock.mjs`'s `STALE_MS`, now 60 min.
+     * ONE staleness threshold for both callers — `lock.mjs`'s `STALE_MS` (60 min by default).
      *
-     * This briefly passed `2 * STALE_MS` here, on the reasoning that a FOREIGN lock deserves more
-     * tolerance than a session's own. It does — but hardening only this side just moved the race:
-     * a sweep-spawned adoption drain runs against a session whose own `capture.mjs` may come back
-     * to life mid-drain, and IT was still on 30 min, so it would unlink the live worker's lock and
+     * A longer threshold for this side alone (say `2 * STALE_MS`, on the reasoning that a FOREIGN
+     * lock deserves more tolerance than a session's own) would just move the race: a sweep-spawned
+     * adoption drain runs against a session whose own `capture.mjs` may come back to life
+     * mid-drain, and a shorter threshold on that side would unlink the live worker's lock and
      * spawn a duplicate. The threshold belongs to the resource, not to the caller. → lock.mjs.
      *
      * `tag` stays: a line about a foreign session's lock must not be filed under `capture` for a
@@ -625,8 +612,8 @@ export function runSweep(currentSid, nowMs, opts = {}) {
     }
     try {
       // `--recovered`: this session ENDED without settling, so anything distilled here is recovered
-      // rather than proposed by a live session. The schema has always modelled the distinction;
-      // this is the only place that can know it, and until now nothing passed it on.
+      // rather than proposed by a live session. The schema models the distinction; this is the
+      // only place that can know it, so it is passed on to the worker.
       const child = _spawn(process.execPath, [WORKER, r.sid, r.transcriptPath, String(r.offset), '--recovered'], {
         // windowsHide, like every other detached spawn here: on Windows `detached` gives the child
         // its own CONSOLE, which flashes a CLI window across the user's screen. These hooks must be
@@ -663,12 +650,11 @@ export function runSweep(currentSid, nowMs, opts = {}) {
     } catch (e) {
       // Release, for exactly capture.mjs's reason: the worker frees the lock in a `finally`, but it
       // never STARTED, so that finally never runs and the lock would sit for the full stale window —
-      // wedging BOTH this sweep and that session's own capture for 30 minutes over an EMFILE blip.
+      // wedging BOTH this sweep and that session's own capture for the whole stale-lock window (60 minutes by default) over an EMFILE blip.
       // The loop REACHED this session — it is neither deferred (never looked at) nor blocked by
       // another worker. Recording it here keeps it out of `reallyDeferred`, which would otherwise
       // report a spawn failure as "deferred by the cap": the mis-attribution the comment below the
-      // loop forbids, reintroduced by the fix written for that comment. The receipt on this path
-      // already names the real cause.
+      // loop forbids. The receipt on this path already names the real cause.
       blockedSids.add(r.sid);
       const freed = _release(lock, owned, r.sid, { tag: 'sweep' });
       const said = { released: 'lock released', 'not-ours': 'lock left alone (not ours)', failed: 'LOCK STUCK — see the release line above' }[freed];
@@ -679,25 +665,24 @@ export function runSweep(currentSid, nowMs, opts = {}) {
   /**
    * DEFERRED IS WHAT THE LOOP NEVER REACHED — not `eligible.slice(max)`.
    *
-   * The precomputed slice was correct only while the loop consumed the head in order. Once blocked
+   * A precomputed slice is correct only while the loop consumes the head in order. Because blocked
    * sessions are skipped rather than counted against the cap, the two disagree: with
-   * `eligible = [a(blocked), b]` and `max = 1`, the loop flushes `b` — and the precomputed
-   * `deferred` was `[b]`, so the receipt named the SAME session as both flushed and deferred, and
-   * `runSweep` returned `deferred: 1` for a session it had just drained.
+   * `eligible = [a(blocked), b]` and `max = 1`, the loop flushes `b` — and a precomputed
+   * `deferred` of `[b]` would name the SAME session as both flushed and deferred, and `runSweep`
+   * would return `deferred: 1` for a session it had just drained.
    *
-   * That is precisely the mis-attribution the receipt three lines down exists to prevent ("a
-   * receipt that names the wrong cause is worse than none, because it is believed"), introduced by
-   * the fix that added the skipping. Derive it from what actually happened instead.
+   * That is precisely the mis-attribution the receipt below exists to prevent ("a receipt that
+   * names the wrong cause is worse than none, because it is believed"). Derive it from what
+   * actually happened instead.
    */
   const touched = new Set([...flushedSids, ...blockedSids]);
   const reallyDeferred = eligible.filter((r) => !touched.has(r.sid));
   if (reallyDeferred.length || blocked || unseen) {
     /**
-     * NO SILENT CAPS — and now no MIS-ATTRIBUTED ones either. The first version printed only
-     * "deferred by MAX_FLUSH_PER_SWEEP" and printed it even when the real cause was a lock nothing
-     * could take, so a permanently wedged sweep read as an ordinary paced one. A receipt that names
-     * the wrong cause is worse than none, because it is believed (this codebase's own rule, learned
-     * on a lock-release message that named the wrong component).
+     * NO SILENT CAPS, and no MIS-ATTRIBUTED ones either. Printing only "deferred by
+     * MAX_FLUSH_PER_SWEEP" even when the real cause was a lock nothing could take would make a
+     * permanently wedged sweep read as an ordinary paced one. A receipt that names the wrong cause
+     * is worse than none, because it is believed.
      */
     const parts = [];
     if (reallyDeferred.length) {
@@ -706,8 +691,8 @@ export function runSweep(currentSid, nowMs, opts = {}) {
     }
     if (blocked) parts.push(`${blocked} skipped on a held lock (a live worker, or a claim race)`);
     // Same count the no-flush receipt carries. A scan that flushes one session and drops three as
-    // unreadable used to report the drops on NEITHER path — the counter existed and nothing printed
-    // it in the half of the function that does the work.
+    // unreadable must report the drops on BOTH paths, including the half of the function that does
+    // the work.
     if (unseen) parts.push(`${unseen} blind-spot entr${unseen === 1 ? 'y' : 'ies'} THIS PROCESS (not counted above)`);
     hlog('sweep', `${flushed} flushed; ${parts.join('; ')} — next sweep in ~${Math.round(debounceMs / 60_000)}m`, currentSid);
   }

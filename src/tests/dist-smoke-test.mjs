@@ -1,16 +1,12 @@
 // RED-PROOF: the BUILT dist/ artifact, not src/*.mjs.
 //
 // WHY THIS FILE EXISTS. Every other test in this suite (old and new) spawns `src/*.mjs` directly —
-// package.json ships `dist` only (`"files": ["dist", ...]`), so nothing before this proved the
-// thing an adopter actually installs even STARTS, let alone works. Each `dist/*.mjs` is still a
-// separate, independently-runnable entry point (`tsup.config.mjs` runs `bundle:false`) — but each
-// entry's OWN dependency graph is inlined into it at build time (confirmed by reading the actual
-// output, not assumed from the config: shared helpers like `creds.mjs` appear duplicated, under
-// esbuild-renamed local bindings, inside every entry that imports them, rather than staying a
-// single shared module reached by a relative import). Neither shape is inherently wrong, but
-// exactly this kind of build-time transformation is what a bundler can quietly get wrong (a
-// dropped export, a stale copy of a helper, `copy-assets.mjs` missing a new asset) — and nothing
-// checked any of it before this file existed.
+// package.json ships `dist` only (`"files": ["dist", ...]`), so only a test of the built output
+// proves the thing an adopter actually installs even STARTS, let alone works. Each `dist/*.mjs` is a
+// separate, independently-runnable entry point with real relative imports (`tsup.config.mjs` runs
+// `bundle:false`) — but a build step can still get something wrong (a dropped export, a mangled
+// specifier, a stale copy of a helper if bundling is ever turned on, `copy-assets.mjs` missing a
+// new asset), and only running the built output checks any of it.
 //
 // SCOPE: not full parity with every src/*-test.mjs — that would double the suite's runtime for
 // marginal extra coverage once the build itself is proven faithful. This exercises the paths most
@@ -157,9 +153,9 @@ console.log('\n=== 2. dist/cli.mjs init deploys a WORKING runtime — same proof
  * process's event loop; `spawnSync` blocks that event loop for the child's whole lifetime, so the
  * server could never answer a request the child makes while it runs (every fetch would time out
  * while APPEARING to pass, since the code under test is fail-open). This is the exact
- * trap `dispose-test.mjs`/`nudge-test.mjs`/etc. already work around; step 4 below used to violate
- * it — not caught by a failing test, since recall.mjs's own fail-open design meant the
- * assertion passed anyway, for the wrong reason, costing ~10-20s per run sitting near its timeout.
+ * trap `dispose-test.mjs`/`nudge-test.mjs`/etc. already work around; violating it is not caught
+ * by a failing test, since recall.mjs's own fail-open design means the assertion passes anyway,
+ * for the wrong reason, costing ~10-20s per run sitting near its timeout.
  * `opts.input`, if given, is written to the child's stdin and the stream is ended — the one thing
  * `spawnSync`'s `input` option did for free that `spawn` needs done by hand.
  */
@@ -205,14 +201,14 @@ console.log('\n=== 4. dist/recall.mjs runs on a minimal hook payload without cra
 }
 
 /**
- * This suite had a gap that let a bundling defect ship: it proved
- * dispose.mjs/recall.mjs's import graphs resolve post-build (steps 3/4 above), but never actually
- * RAN capture.mjs — the exact Stop-hook file that crashed, and the only way to observe the
- * dual-mode-file-inlined-into-another-entry defect this fix exists to catch. `VECTROS_MEM_REAP_OFF=1`
- * puts `runReap()` on the `{skipped: '...'}` early-return path — the specific shape that crashed
- * (reap.mjs's old CLI block, duplicated into capture.mjs's dist output, unconditionally read
- * `.plan.prune` off it) — so this exercises precisely the branch a real Stop event's most common
- * case takes, not just the rare one where the reaper actually runs.
+ * Steps 3/4 above prove dispose.mjs/recall.mjs's import graphs resolve post-build; a bundling
+ * defect also needs a step that actually RAN capture.mjs — the Stop-hook file that imports
+ * reap.mjs, and the only way to observe the dual-mode-file-inlined-into-another-entry defect this
+ * test exists to catch.
+ * `VECTROS_MEM_REAP_OFF=1` puts `runReap()` on the `{skipped: '...'}` early-return path — the
+ * shape a bundled reap.mjs's CLI block would crash on if it unconditionally read `.plan.prune` —
+ * so this exercises precisely the code path a real Stop
+ * event's most common case takes, not just the rare one where the reaper actually runs.
  */
 console.log('\n=== 5. dist/capture.mjs runs on a minimal hook payload without crashing — the exact file/path that crashed ===');
 {

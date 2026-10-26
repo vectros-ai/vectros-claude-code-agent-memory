@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * THE WIDENED ERROR RECEIPT. Before this fix, `recall.mjs`'s search-error log line was
- * `status + 200 chars of body` — enough to see a 413, not enough to DIAGNOSE a 403: a fronting
+ * THE WIDENED ERROR RECEIPT. A search-error log line of only `status + 200 chars of body` (as
+ * `recall.mjs` would otherwise write) is enough to see a 413, not enough to DIAGNOSE a 403: a fronting
  * WAF's own documented error contract puts `requestId: null` in the STATIC block body, so the real
  * correlator (the CloudFront `x-amz-cf-id` response header, the id a WAF sampled-requests lookup
- * actually keys on) was never captured, and there was no query-BYTE-length or 403-shape signal to
+ * actually keys on) is never captured, and there is no query-BYTE-length or 403-shape signal to
  * eyeball whether this looks like a WAF content-inspection rule firing on legitimate search input
  * — exactly the kind of gap that lets one environment's fronting infrastructure silently reject a
  * request shape another environment's would pass, with no signal pointing at why.

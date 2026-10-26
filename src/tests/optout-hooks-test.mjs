@@ -489,8 +489,14 @@ console.log('\n=== 9. the config receipt is deferred: an excluded session writes
   check('...and no `config applied` line at all', !logText(w).includes('config applied'), logText(w));
 
   const wc = mkWorld(cfg);
-  run(wc, 'evaluate.mjs', HOOKS.evaluate(randomUUID(), D.mine).payload);
+  // No `transcript_path` here, on purpose: with one, the first evaluate call spawns a DETACHED background evaluator,
+  // a second process that writes its own `config applied` line whenever it gets scheduled, so the count below would be
+  // 1 or 2 depending on machine load. Without it no worker can start and the hook writes exactly one receipt.
+  const controlPayload = HOOKS.evaluate(randomUUID(), D.mine).payload;
+  delete controlPayload.transcript_path;
+  run(wc, 'evaluate.mjs', controlPayload);
   eq('CONTROL: a session that RUNS still gets its receipt, once per hook process', logLines(wc).filter((l) => /config applied: CONTEXT_CAP=8000\(file\)/.test(l)).length, 1);
+  check('...and only the hook process wrote to the log (no background worker started)', logLines(wc).every((l) => /^\S+\s+(config|evaluate)\s/.test(l)) && logLines(wc).length === 2, logText(wc));
 
   // A broken config keeps its loud per-process receipt (the other half of failing closed).
   const wb = mkWorld('{ nope');

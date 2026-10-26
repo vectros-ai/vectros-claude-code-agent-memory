@@ -15,7 +15,7 @@
  *     the clear. Zero orientation delivered, boundary consumed, never re-owed.
  *   - the comment above the line said "A failed orient leaves the flag set, so the next
  *     healthy prompt orients". The code said `if (isFirstPrompt) state.orientPending =
- *     false`. The comment described the fix; the line never got it.
+ *     false`. The comment states the rule; the code must follow it.
  *
  * The rule was already written 4 lines above the bug, for the enumerated ids:
  * *"over-offering is recoverable, a false receipt is not"* — and `orientPending: false` with no
@@ -88,10 +88,10 @@ function withStub(route, fn) {
  *
  * The stub server lives in THIS process. `spawnSync` blocks the event loop for the child's whole
  * lifetime, so the server can never answer the request the child is making: every fetch times out,
- * `search()` returns `[]`, the guard fires, and case 1 takes ROUND ONE's path while appearing to
- * pass. The preconditions below are what caught it — a test whose setup fails silently proves the
- * opposite of what it claims. (Diagnosed in one line by the receipt discipline this branch just added:
- * `search FAILED (timeout after 5000ms)`.)
+ * `search()` returns `[]`, the guard fires, and case 1 takes the wrong path while appearing to
+ * pass. The preconditions below are what catch it — a test whose setup fails silently proves the
+ * opposite of what it claims. (The receipt `search FAILED (timeout after 5000ms)` diagnoses it in
+ * one line.)
  */
 const runRecall = (base) => new Promise((resolve) => {
   const child = spawn(process.execPath, [path.join(DIR, 'recall.mjs')], {
@@ -118,12 +118,12 @@ const runRecall = (base) => new Promise((resolve) => {
     try { state = JSON.parse(fs.readFileSync(SP, 'utf8')); }
     catch { /* no state written; the assertions surface it */ }
     // 'Session orientation' is the first-prompt HITS header — it ships whether or not the
-    // enumeration produced anything, so it cannot tell the two apart (it fooled the first draft of
-    // this test). The PINNED set is no longer injected (it lives in the auto-loaded
-    // MEMORY.md; enumerate.mjs § renderOrientBlock), so the only thing the orient block still injects
-    // is the resumed thread — 'This thread's earlier working memory'. That is the marker that
-    // observes an injected orient block; `injectedPin` separately proves the pinned set is ABSENT
-    // from the injection (the efficiency win) — the same measurement-honesty rule as elsewhere.
+    // enumeration produced anything, so it cannot tell the two apart. The PINNED set is not
+    // injected (it lives in the auto-loaded MEMORY.md; enumerate.mjs § renderOrientBlock), so the
+    // only thing the orient block still injects is the resumed thread — 'This thread's earlier
+    // working memory'. That is the marker that observes an injected orient block; `injectedPin`
+    // separately proves the pinned set is ABSENT from the injection (the efficiency win) — the same
+    // measurement-honesty rule as elsewhere.
     resolve({
       ctx, state,
       injectedThread: ctx.includes("This thread's earlier working memory"),
@@ -213,12 +213,12 @@ eq('the healthy path consumes the boundary', r.state.orientPending, false);
 // ─────────────────────────────────────────────────────────────────────────────
 // 2b. THE EMPTY TIER — HTTP 200 {data:[]}. The orient RAN and had nothing to say.
 //
-// This is the case the first three missed, and it is the one that matters most: it is the
+// This is the case the others miss, and it is the one that matters most: it is the
 // state of EVERY NEW USER and every OSS adopter, and never of a machine with pinned records
 // already, which could not surface it. Case 1 covers 500,
 // case 2 covers one record, case 3 covers both-fail; none covers SUCCESS-WITH-NOTHING.
 //
-// With the round-3 gate (`orientPart.length && !orientDropped`) the flag never cleared, so
+// With a gate of `orientPart.length && !orientDropped` the flag would never clear, so
 // every prompt for the life of the session re-ran the full multi-query orient: ~6x the REST
 // calls, the rolling-window tail never read, already-served hits dropped without their
 // `[recalled earlier]` line, and the 50th prompt of the session still told it was "matching this session's kickoff".
@@ -244,15 +244,13 @@ eq('an EMPTY tier consumes the boundary — the orient ran, and owed nothing',
 // 2b stubs a search HIT so the nothing-to-inject path is not taken, and says so in its own
 // precondition. That precondition is honest, and what it honestly documents is the avoidance:
 // every case above walks the delivery path. A brand-new user has BOTH an empty pinned tier and an
-// empty store, so nothing is injected at all — and the guard that used to sit on that path
-// returned before the flag was ever decided. The orient RAN. It owed nothing. The flag latched
-// anyway, for the life of the session, for exactly the population this fix targets and for
-// nobody on this machine.
+// empty store, so nothing is injected at all — and a guard on that path that returned before the
+// flag was decided would leave the flag latched for the life of the session, though the orient
+// RAN and owed nothing, for exactly the population this targets and for nobody on this machine.
 //
-// One earlier fix left the same guard persisting `false` (consumed a boundary never delivered);
-// this one left it persisting `true` (never consumed one that was). Same guard, opposite direction,
-// both bugs — the reason the fix is structural (ONE commit site, output decided after) and not one
-// more predicate layered on top.
+// A guard persisting `false` consumes a boundary never delivered; one persisting `true` never
+// consumes one that was. Same guard, opposite directions, both bugs — the reason the design is
+// structural (ONE commit site, output decided after) and not one more predicate layered on top.
 //
 // This case and case 3 are the DISCRIMINATING PAIR: identical nothing-to-inject path, opposite
 // `orientOk`, opposite verdicts. Together they prove the flag now follows the receipt and not the
@@ -275,12 +273,12 @@ check('and state was still COMMITTED on that path, not skipped',
   r.state.promptCount === 1, `promptCount=${r.state.promptCount} — expected 1`);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 2d. THE INJECTED BLOCK OVERFLOWS THE BUDGET — now via the RESUMED-THREAD block (pinned no longer
-//     injects), so this exercises the FIT loop on the content that is actually injected. `line()`
+// 2d. THE INJECTED BLOCK OVERFLOWS THE BUDGET — via the RESUMED-THREAD block (pinned is not
+//     injected), so this exercises the FIT loop on the content that is actually injected. `line()`
 //     caps the body at BODY_MAX=400 and the TITLE at nothing, so a big thread set overruns
 //     CONTEXT_CAP and `orientDropped` goes positive.
 //
-//     `orientDropped` used to gate the FLAG as well as the served-marking. But the drop is
+//     `orientDropped` does not gate the FLAG, only the served-marking. The drop is
 //     DETERMINISTIC: the retry re-renders the same block against the same budget and drops the
 //     same lines. That is not a re-owe, it is a loop — so the boundary is CONSUMED (pinned lookup
 //     succeeded → orientOk), and the dropped THREAD records are NOT served (they stay eligible as
@@ -312,14 +310,13 @@ check('a DROPPED thread record is NOT marked served (it stays eligible as a hit)
   !(r.state.injectedIds || []).includes('thr-7'), `injectedIds=${JSON.stringify(r.state.injectedIds)}`);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 2e. RESUME, thread lookup DOWN, pinned fine — the second latch, and a regression this branch
-//     introduced. Both lookups are POST /v1/records/lookup, so the request BODY is the only
-//     discriminator; the harness used to collect it and discard it, which is why this had no test.
+// 2e. RESUME, thread lookup DOWN, pinned fine — the second latch. Both lookups are
+//     POST /v1/records/lookup, so the request BODY is the only discriminator; the harness must
+//     collect it.
 //
-//     A thread failure while pinned succeeds means the endpoint is up and the key is good, so the
-//     realistic cause is a persistent shape-400 on `{field:'threadId'}` — the retry cannot fix it
-//     and re-injects the whole pinned block every prompt. It is a DEGRADATION with a receipt, not
-//     an unrunnable orientation.
+//     A thread failure while pinned succeeds means the endpoint is up and the key is good, so a
+//     retry cannot fix it and would re-run both lookups and re-inject the thread block on every
+//     prompt. It is a DEGRADATION with a receipt, not an unrunnable orientation.
 // ─────────────────────────────────────────────────────────────────────────────
 console.log('\n=== 2e. RESUME: pinned ok, thread lookup 500 -> degraded, but boundary IS consumed ===');
 reset(); seedPending('resume');
@@ -337,9 +334,9 @@ check('no crash', !r.crash, r.crash);
 /**
  * THE PRECONDITION THAT ACTUALLY OBSERVES THE RESUME PATH.
  *
- * This used to be `check('the resume path really ran', r.injectedOrient)` — and `injectedOrient` is
- * SOURCE-INDEPENDENT: it is true on every non-resume path in the file. So the assertion was
- * satisfied by a run that never made a thread lookup at all. `recall.mjs` reads
+ * A check like `check('the resume path really ran', r.injectedOrient)` would be wrong:
+ * `injectedOrient` is SOURCE-INDEPENDENT, true on every non-resume path in the file, so the
+ * assertion would be satisfied by a run that never made a thread lookup at all. `recall.mjs` reads
  * `state.orientSource || 'startup'`, so breaking the plumbing silently yields `isResume=false` ->
  * `thread = Promise.resolve([])` -> never null -> `ok = pinned !== null` -> **2e and 2f both still
  * pass with the resume path completely disabled.** The fallback satisfies the test.
@@ -354,6 +351,10 @@ check('precondition: the hook reached the state commit (prompt #1 ran to complet
   r.state.promptCount === 1, `promptCount=${r.state.promptCount}`);
 eq('a failed SUPPLEMENT does not re-owe the orientation — the core (pinned lookup) ran',
   r.state.orientPending, false);
+check('the degradation is logged, saying what a retry would (not) do',
+  fs.readFileSync(process.env.VECTROS_HOOKLOG_PATH, 'utf8').split('\n').some((l) => /thread lookup FAILED on a RESUME/.test(l)
+    && /a retry would only re-run both lookups and re-inject the thread block/.test(l)),
+  fs.readFileSync(process.env.VECTROS_HOOKLOG_PATH, 'utf8').slice(-1500));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 2f. RESUME, PINNED down -> the core failed -> the boundary IS still owed. The discriminating
@@ -387,7 +388,7 @@ eq('a failed CORE still owes the orientation — a retry can fix this one', r.st
 // The bug: recall could only ever WRITE false. On `true` a failure survives by not being touched;
 // on `undefined` there is nothing to leave alone, and `promptCount` has just moved to 1 — so
 // `!promptCount` is false forever and the session can never be prompt #1 again. The orientation is
-// not re-owed, it is GONE. Rounds 1-5 latched ON (over-offering, recoverable). This is the false
+// not re-owed, it is GONE. Latching ON over-offers, which is recoverable; this is the false
 // receipt the header at the top of this file calls unrecoverable.
 // ─────────────────────────────────────────────────────────────────────────────
 console.log('\n=== 2g. PRE-FLAG session (no orientPending field) + orient FAILS -> must RE-OWE ===');

@@ -2,7 +2,7 @@
 /**
  * THE RECEIPT-DISCIPLINE ENFORCER — every fail-open catch must say what it did, checked mechanically.
  *
- * WHY THIS FILE EXISTS: this discipline needs a `run-all.mjs`, not another paragraph.
+ * WHY THIS FILE EXISTS: the receipt rule needs a `run-all.mjs`, not another paragraph.
  *
  * Four censuses were opened against this codebase. Two closed permanently; two kept reverting to
  * instance-fixing. The split was not effort and it was not care:
@@ -30,7 +30,7 @@
  *   4. RECEIPT      — return a `state:` / `ok:` / `why:` field for the caller to honour
  *   5. DECLARE      — carry `silence-ok: <reason>` inside the block
  *
- * (5) is not a loophole, it is the point. this discipline permits silence — "missing → a safe default, quietly"
+ * (5) is not a loophole, it is the point. The receipt rule permits silence — "missing → a safe default, quietly"
  * — and an earlier, narrower version of this rule was withdrawn on exactly that ground. A rule that
  * cannot express its legitimate exceptions gets disabled wholesale. So the exception must be written
  * at the site, must carry a reason, and is greppable forever:  grep -rn 'silence-ok' src/*.mjs
@@ -43,7 +43,7 @@
  *     try { ... file = parsed; } catch { /​* missing/unreadable/malformed → fail-open *​/ }
  *
  * The catch body is EMPTY — the default was established *before* the try. A lint scoped to catches
- * that return a default would have graded that file clean while the worst violation of this discipline in the
+ * that return a default would have graded that file clean while the worst violation of the receipt rule in the
  * system sat inside it. It was found by reading the code, not by the narrower rule; encoding
  * that rule literally would have encoded the blind spot with it. An empty catch is the most
  * silent thing there is, so it needs a reason more than any other shape, not less.
@@ -64,8 +64,8 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOOKS = path.dirname(HERE); // the runtime hooks — the things that ship and fail open
 
 // `blank()` now lives in ./lintlib.mjs — undeclared-const-test.mjs needed it too, and a second
-// copy would have been the exact census failure this discipline is about. Its history (the nested-template bug that
-// made a flat scanner report a file it had entirely failed to read as clean) is documented there.
+// copy would have been the duplicate-primitive drift the lint exists to prevent. The nested-template bug
+// that makes a flat scanner report a file it had entirely failed to read as clean is documented there.
 
 const lineOf = (src, idx) => src.slice(0, idx).split('\n').length;
 
@@ -82,8 +82,8 @@ function endOfBlock(b, i) {
 /**
  * Every catch body in `src`, as {start,end} offsets into the ORIGINAL source.
  *
- * TWO SHAPES, and missing the second one made this lint blind to the most silent construct in the
- * system. It used to handle only the statement form:
+ * TWO SHAPES, and missing the second one would make this lint blind to the most silent construct
+ * in the system. The statement form alone is not enough:
  *
  *     try { … } catch (e) { … }          // the `(e)` is optional, then a BLOCK
  *
@@ -95,7 +95,7 @@ function endOfBlock(b, i) {
  *
  * That is the widest fail-open surface here by a distance. ANY throw anywhere in a hook's main()
  * lands there and is discarded — no injection, no state write, no log — which is indistinguishable
- * from a healthy quiet session. this discipline's founding story, unreachable by its own enforcer. And the tell
+ * from a healthy quiet session. The receipt rule's founding story, unreachable by its own enforcer. And the tell
  * was in the tree: `recall-eval-worker.mjs:309` documents a bug this exact construct swallowed,
  * eleven lines above its own `main().catch(() => {})`.
  *
@@ -181,13 +181,13 @@ const RECEIPT = /[{,]\s*(state|ok|why|error)\s*:/;
  *
  * The naive `/silence-ok:\s*\S/` ACCEPTED `catch { /​* silence-ok: *​/ }` — `\s*` skipped the space and `\S`
  * happily matched the `*` of the comment terminator. A declaration with no reason is exactly the
- * rubber-stamp this rule exists to prevent, and the first version of the rule licensed it. Caught by
- * this file's own negative assertion, which is the only reason it isn't still true.
+ * rubber-stamp this rule exists to prevent, and the naive pattern licenses it. This file's own
+ * negative assertion is what keeps it rejected.
  *
- * The SECOND version was wrong too, and the same assertion caught it again: stripping `*​/` only at
- * end-of-line left `catch { /​* silence-ok: *​/ return {}; }` claiming a reason of "*​/ return {}; }" —
+ * Stripping the terminator alone is also wrong, as the same assertion shows: stripping `*​/` only at
+ * end-of-line leaves `catch { /​* silence-ok: *​/ return {}; }` claiming a reason of "*​/ return {}; }" —
  * long enough, has letters, passes. The reason must end where the COMMENT ends, not where the line
- * does. Two bugs in four lines, both in the direction of accepting a rubber stamp; a rule's
+ * does. Both mistakes accept a rubber stamp; a rule's
  * enforcement drifts toward permissiveness unless something asserts otherwise.
  */
 function declaredReason(body) {
@@ -208,7 +208,7 @@ function classify(body) {
 
 const files = fs.readdirSync(HOOKS).filter((f) => f.endsWith('.mjs')).sort();
 
-console.log(`=== this discipline receipt lint — ${files.length} runtime hook files (tests/ is out of scope) ===\n`);
+console.log(`=== receipt lint — ${files.length} runtime hook files (tests/ is out of scope) ===\n`);
 
 const violations = [];
 const unparseable = [];
@@ -219,25 +219,24 @@ let total = 0;
 /**
  * A block's OWN body — with any NESTED catch bodies masked out.
  *
- * ⚠️ THIS IS THE FIX FOR THE LINT'S OWN NEUTRALIZATION, and it was live on the exact population
- * this lint was written to reach. `catchBlocks` emits OVERLAPPING blocks (an outer body textually
- * contains its inner ones), and `classify` tries `declaredReason` FIRST against the whole body. So
- * **any `silence-ok:` in a nested catch graded every ENCLOSING catch as `declared`** — which is the
- * shape of all six arrow handlers this branch just added:
+ * ⚠️ THIS GUARDS THE LINT AGAINST NEUTRALIZING ITSELF, on the exact population it exists to
+ * reach. `catchBlocks` emits OVERLAPPING blocks (an outer body textually contains its inner ones),
+ * and `classify` tries `declaredReason` FIRST against the whole body. So
+ * **any `silence-ok:` in a nested catch would grade every ENCLOSING catch as `declared`** — which
+ * is the shape of every arrow handler like:
  *
  *     main().catch((e) => {
  *       try { hlog('recall', `hook CRASHED …`); }
  *       catch { |* silence-ok: the log IS the last resort … *| }
  *     });
  *
- * PROVEN before this fix: deleting the `hlog(...)` from any of the six left the lint GREEN. The
- * handler became `{ try { } catch { |* silence-ok: … *| } }` -> `declared` -> 0 violations. The
- * file's own headline finding — a silent `main().catch(() => {})` — restored, and invisible to the
- * enforcer built to catch it. The commit's proof ("6 before, 0 after") was satisfied by the WRONG
- * proposition: the six grade `declared` because of a comment, never `logs`. The lint could not
- * observe the thing its commit message claimed.
+ * Without the masking, deleting the `hlog(...)` from any such handler leaves the lint GREEN. The
+ * handler becomes `{ try { } catch { |* silence-ok: … *| } }` -> `declared` -> 0 violations: a
+ * silent `main().catch(() => {})` restored, and invisible to the enforcer built to catch it. Such
+ * handlers would grade `declared` because of a comment, never `logs`, so the lint could not
+ * observe what it claims to.
  *
- * The fixtures missed it because they differ from the shipped shape in exactly the load-bearing
+ * Fixtures that miss it differ from the shipped shape in exactly the load-bearing
  * way: `ARROW_SILENT` has no comment, `ARROW_LOGS` has no nested catch. Neither is a handler whose
  * receipt is guarded by a `silence-ok:` catch — which is every real one.
  *
@@ -301,7 +300,7 @@ if (violations.length) {
  * static structural check because reliably forcing a real uncaught exception through this file's
  * deliberately fail-open call graph (every read/spawn/fetch already catches its own errors, by
  * design) would need test infrastructure disproportionate to what it proves. What this DOES prove:
- * the fix can never silently regress back to a bare `await main();` in either file.
+ * the crash receipt can never silently regress back to a bare `await main();` in either file.
  */
 console.log('=== detached-worker crash-receipt check ===\n');
 for (const f of ['capture-worker.mjs', 'recall-eval-worker.mjs']) {

@@ -46,7 +46,7 @@ const HOOK_FILES = {
 
 function usage() {
   console.log([
-    'Usage: claude-code-agent-memory <command>',
+    'Usage: claude-code-agent-memory <command> | --help | --version',
     '',
     'Commands:',
     '  init [--dry-run]   deploy the hook runtime and wire it into ~/.claude/settings.json',
@@ -60,6 +60,17 @@ function usage() {
     '  VECTROS_MEMORY_HOME   where the runtime deploys (default: <claude config dir>/vectros-memory)',
     "  CLAUDE_CONFIG_DIR     Claude Code's own config dir (default: ~/.claude)",
   ].join('\n'));
+}
+
+/** `--version`: the version of the installed package this file belongs to (the package.json one level above `dist/`). */
+function printVersion() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(HERE, '..', 'package.json'), 'utf8'));
+    console.log(pkg.version);
+  } catch {
+    console.error('claude-code-agent-memory: the package version could not be read');
+    process.exitCode = 1;
+  }
 }
 
 /**
@@ -141,28 +152,29 @@ function deployRuntime() {
  * `require('@napi-rs/keyring')` — run from the flat DEPLOYED location, which otherwise has no
  * `node_modules` of its own — can still find it.
  *
- * FOUND EMPIRICALLY, before any live cutover: without this, that require always
- * `MODULE_NOT_FOUND`s post-deploy, and `CLAUDE_CODE_OAUTH_TOKEN` silently degrades to the
- * plaintext-file tier on every real install — not just platforms lacking a prebuild, which is
- * the only case that degradation is supposed to cover.
+ * Without this, that require always `MODULE_NOT_FOUND`s post-deploy, and
+ * `CLAUDE_CODE_OAUTH_TOKEN` silently degrades to the plaintext-file tier on every real install —
+ * not just platforms lacking a prebuild, which is the only case that degradation is supposed to
+ * cover.
  *
  * Deliberately copies only the ONE platform package this machine's loader actually uses, not all
  * twelve `@napi-rs/keyring` carries as `optionalDependencies` — keeps the deployed runtime from
  * bloating with binaries for platforms nobody here is running.
  *
- * FOUND EMPIRICALLY (a real, live CI failure, not a hypothetical): which package is "the one this
- * machine actually uses" must be asked of the loader itself, not inferred by walking
- * `optionalDependencies` and taking the first name that merely `require.resolve()`s. A package
+ * Which package is "the one this machine actually uses" must be asked of the loader itself, not
+ * inferred by walking `optionalDependencies` and taking the first name that merely
+ * `require.resolve()`s. A package
  * being resolvable only proves npm put a directory there — it's a documented npm optional-
  * dependency bug class (the same one this file's own error message points at,
  * github.com/npm/cli/issues/4828) that a stray, wrong-libc stub can be left resolvable alongside
  * the real one, and `Object.keys(optionalDependencies)` iterates in fixed declaration order (every
- * linux arch here lists its `-gnu` variant before its `-musl` one) — so on a real musl container
- * the old first-match loop silently copied the incompatible glibc package, and the genuinely
- * correct musl one was never deployed at all. Forcing the real `require('@napi-rs/keyring')` here
- * runs the SAME musl-aware platform switch `creds.mjs` will run at actual hook-time, so reading
- * back which platform package that load populated into `require.cache` is authoritative —
- * whatever it picked is guaranteed to be loadable, because it was just, in fact, loaded.
+ * linux arch here lists its `-gnu` variant before its `-musl` one) — so a first-match loop on a
+ * real musl container would silently copy the incompatible glibc package, and the genuinely
+ * correct musl one would never be deployed at all. Forcing the real
+ * `require('@napi-rs/keyring')` here runs the SAME musl-aware platform switch `creds.mjs` will run
+ * at actual hook-time, so reading back which platform package that load populated into
+ * `require.cache` is authoritative — whatever it picked is guaranteed to be loadable, because it
+ * was just, in fact, loaded.
  */
 function deployKeyring(dest) {
   let keyringPkgDir;
@@ -228,14 +240,13 @@ function mergeSettings(runtimeDir) {
     settings.hooks[event] ||= [];
     const commands = files.map((f) => `node "${path.join(runtimeDir, f)}"`);
     /**
-     * PER-COMMAND, not per-event. The first cut checked "does ANY block already carry ANY of
-     * this event's commands" and skipped the WHOLE event on a single match — so an upgrade that
-     * adds a file to an event already partially wired (e.g. `Stop` gaining a third hook file)
-     * silently wired NOTHING new for that event: the pre-existing command for the OTHER file
-     * satisfied `already`, and the new one was never added, with no diagnostic. Found tracing
-     * this docstring's own "an upgrade... never duplicates the wiring" claim
-     * against what happens when `HOOK_FILES[event]` grows. Compute what's actually missing,
-     * across every existing block for this event, and add only that.
+     * PER-COMMAND, not per-event. Checking "does ANY block already carry ANY of this event's
+     * commands" and skipping the WHOLE event on a single match would mean an upgrade that adds a
+     * file to an event already partially wired (e.g. `Stop` gaining a third hook file) silently
+     * wires NOTHING new for that event: the pre-existing command for the OTHER file satisfies
+     * `already`, and the new one is never added, with no diagnostic. So compute what's actually
+     * missing, across every existing block for this event, and add only that — an upgrade never
+     * duplicates the wiring and never skips a new file when `HOOK_FILES[event]` grows.
      */
     const existing = new Set(settings.hooks[event]
       .flatMap((block) => (Array.isArray(block.hooks) ? block.hooks : []))
@@ -255,11 +266,10 @@ function mergeSettings(runtimeDir) {
     return settingsPath;
   }
   fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-  // this used to be a plain fs.writeFileSync — a truncate-then-
-  // write over the user's ENTIRE global Claude Code config (MCP servers, permissions, every other
-  // tool's hooks), not just the block this function adds. `writeFileAtomic` is already the tier
-  // used for credentials.json a few lines away in this same file; settings.json is at least as
-  // consequential and had no reason to be on the weaker path.
+  // Atomic, not a plain fs.writeFileSync: a truncate-then-write would put the user's ENTIRE global
+  // Claude Code config (MCP servers, permissions, every other tool's hooks) at risk, not just the
+  // block this function adds. `writeFileAtomic` is the tier used for credentials.json elsewhere
+  // in this same file; settings.json is at least as consequential.
   writeFileAtomic(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
   console.log(`wired ${added} hook event(s) into ${settingsPath}`);
   return settingsPath;
@@ -269,9 +279,7 @@ function mergeSettings(runtimeDir) {
  * Pin whatever `vectros` identity is CURRENTLY active into `credentials.json`, so this package's
  * hooks resolve a STABLE alias from here on — immune to a LATER, unrelated `vectros switch`/
  * `bootstrap --tenant test` elsewhere on the machine changing what "active" means out from under
- * them (a real incident: provisioning an unrelated test-tenant credential for this package's own
- * harness work silently flipped a machine's active identity, and every hook that resolves
- * `VECTROS_API_KEY` with no explicit alias followed it — undetected, for a live session).
+ * them: every hook that resolves `VECTROS_API_KEY` with no explicit alias follows whichever identity is active.
  *
  * Best-effort and NEVER fatal to `init`: no `vectros` install, no active identity yet, or a
  * failed probe all just skip pinning — the adopter still has the `VECTROS_API_KEY`/
@@ -348,6 +356,15 @@ switch (verb) {
   }
   case 'set-token':
     setToken();
+    break;
+  case '--help':
+  case '-h':
+  case 'help':
+    usage();
+    break;
+  case '--version':
+  case '-v':
+    printVersion();
     break;
   default:
     usage();

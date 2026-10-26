@@ -3,7 +3,7 @@
  * THE BOOTSTRAP CYCLE — `config.mjs` <-> `atomic.mjs` / `hooklog.mjs`, and the guard that makes it safe.
  *
  * WHAT IS AT STAKE. `config.mjs` imports `readJsonSafe` from `atomic.mjs` and `hlog` from
- * `hooklog.mjs` on purpose (this discipline: one corrupt-detector, one logger, not two). The moment those two
+ * `hooklog.mjs` on purpose (one corrupt-detector, one logger, not two). The moment those two
  * modules take THEIR tunables from the seam, the import graph is a cycle — and ESM's rule is that
  * reading a `const` from a module still evaluating is a `ReferenceError`, not `undefined`.
  * `config.mjs`'s resolution calls `readJsonSafe` as its first act, so a named
@@ -56,8 +56,8 @@ const write = (name, body) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. THE MECHANISM. Two fixture pairs with the identical cycle: one reading a named export from
-//    inside the dead zone (the shape BEFORE this change), one going through a guarded accessor
-//    (the shape after). The first MUST throw; if it does not, this whole guard is cargo cult.
+//    inside the dead zone (the unguarded shape), one going through a guarded accessor
+//    (the guarded shape). The first MUST throw; if it does not, this whole guard is cargo cult.
 // ─────────────────────────────────────────────────────────────────────────────
 console.log('=== 1. the ESM cycle, with and without the guard ===');
 
@@ -141,7 +141,7 @@ eq('and the re-entrant call got the DEFAULT (12), so resolution completed on top
  *
  * `leaf` starts evaluating, hits its import of `cfg`, and hands control over; `cfg`'s body then
  * calls back into `leaf` — whose own body has not run. A `const` in leaf is therefore dead, and a
- * hoisted `function` is not. That is the entire difference between the crash and the fix, and
+ * hoisted `function` is not. That is the entire difference between the crash and the guard, and
  * neither fixture above can express it because both enter through `cfg`.
  */
 console.log('\n=== 1b. THE REAL ORDERING: entry is the LEAF, and the leaf\'s own consts are dead ===');

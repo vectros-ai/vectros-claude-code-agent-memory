@@ -1,9 +1,10 @@
 /**
- * `report.mjs --compare` — the instrument that decides whether the cutover may proceed.
+ * `report.mjs --compare` — the instrument that decides whether the queue and the record corpus
+ * AGREE.
  *
- * What this is really guarding: Phase A ends when the queue and the record corpus AGREE, and this
- * is the only thing that measures that. So its failure modes are worse than a wrong number — a
- * comparison that reports agreement it did not observe is an authorization to flip the reads.
+ * What this is really guarding: it is the only thing that measures that agreement. So its failure
+ * modes are worse than a wrong number — a comparison that reports agreement it did not observe is
+ * an authorization to trust records that do not match the queue.
  *
  * Two specific ways that happens, both tested below. (1) A lookup that could not RUN returns
  * `null`, and treating it as an empty corpus turns an outage into "every candidate is missing" —
@@ -126,7 +127,7 @@ console.log('\n=== 3. an unrunnable lookup is UNKNOWN, never "the corpus is empt
   eq('...while still saying how much was at stake', r.queued, 2);
 }
 
-console.log('\n=== 4. candidates proposed before the cutover are out of scope, not lost ===');
+console.log('\n=== 4. candidates with no id (proposed before the spool existed) are out of scope, not lost ===');
 {
   /**
    * Most of the existing corpus has no externalId — it was proposed before dual-write shipped, and
@@ -169,17 +170,17 @@ console.log('\n=== 6. an unreadable queue refuses to answer ===');
   fs.rmSync(queueFor(SID), { recursive: true, force: true });
 }
 
-console.log('\n=== 7. a session with nothing post-cutover touches no network ===');
+console.log('\n=== 7. a session with nothing to compare touches no network ===');
 {
   // A lookup per session with nothing to compare would be 60+ pointless round trips on a corpus
-  // that is almost entirely pre-cutover for the first days.
+  // that is mostly legacy entries without an externalId.
   reset();
   append(RAW, { op: 'propose', title: 'from before', body: 'b', kind: 'project' });
   const c = corpus([]);
   const r = await compareSession(SID, { fetchImpl: c.impl });
   eq('nothing was asked of the store', c.calls.length, 0);
   eq('...and it is still a clean answer', r.state, 'ok');
-  eq('...with the pre-cutover count intact', r.preCutover, 1);
+  eq('...with the no-id count intact', r.preCutover, 1);
 }
 
 console.log('\n=== 8. a row that EXISTS but holds the wrong content ===');

@@ -151,7 +151,7 @@ if (!optedIn) {
       eq('cred() reads back the SECOND value only', readCred(home), 'sk-ant-oat01-second-value');
     } finally {
       // ALWAYS runs, even on an assertion failure above — RESTORE, never just delete. This is a
-      // REAL, machine-wide credential store entry; a prior version of this cleanup got exactly this step wrong.
+      // REAL, machine-wide credential store entry; deleting it would destroy the operator's own token.
       if (preExisting != null) {
         storeOAuthToken(preExisting);
         eq('cleanup: the pre-existing entry was restored, not lost', _peekOAuthTokenRaw(), preExisting);

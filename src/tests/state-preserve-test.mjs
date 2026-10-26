@@ -45,7 +45,7 @@ try {
 }
 
 // END-TO-END: the block above proves the state.mjs read-merge invariant stop.mjs RELIES on; this
-// proves stop.mjs itself actually SETS transcriptPath/lastStopAt from the hook payload (this discipline — the
+// proves stop.mjs itself actually SETS transcriptPath/lastStopAt from the hook payload (test the
 // contract, not a proxy). Spawn the real hook with a synthetic Stop payload.
 const SID2 = 'state-preserve-e2e-0002'; // word sid — excluded from report stats
 const clean2 = () => { try { fs.unlinkSync(statePath(SID2)); } catch {} };

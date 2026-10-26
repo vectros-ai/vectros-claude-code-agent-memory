@@ -54,25 +54,20 @@ const API_KEY = cred('VECTROS_API_KEY');
 // Cost curve (vs a ~$30/hr Opus stream): 25s 9.8% · 60s 4.9% · 120s 3.1% · 180s 2.6% ·
 // 300s 2.1%. The knee is ~120-180s; below it capture's fixed floor dominates.
 //
-// ⚠️ The VALUE side of this trade was wrong, and the correction matters more than the number.
-// This was set to 180s reasoning that "mid-run recall is no longer the primary mechanism —
-// orient recall front-loads knowledge, leaving it a sparse drift-catcher." A live session
-// falsified that:
-//
-//   Orient recall AND the session's hand-written kickoff BOTH missed a decision doc that
-//   governed the half of the issue that was wrong — and missed it for the SAME reason. Both
-//   keyed off the issue's framing, and the issue framed the problem as a coercion bug. Mid-run
-//   recall found it, on the tool call where the session was grepping the relevant code path.
+// ⚠️ The VALUE side of this trade matters more than the number. Mid-run recall is not a sparse
+// drift-catcher behind orient recall: orient recall and a hand-written kickoff both key off the
+// issue's framing, so a decision doc that governs the half of the issue the framing got wrong is
+// missed by both for the same reason, and mid-run recall is what finds it, on the tool call where
+// the session greps the relevant code path.
 //
 // The asymmetry is structural, not incidental: prompt-time recall inherits the prompt's
 // framing INCLUDING ITS ERRORS. Mid-run recall keys on what you actually did, so it cannot
 // inherit a framing error it never saw. That makes it the half of the loop that catches the
 // miss the other half is blind to by construction — not a redundant backstop.
 //
-// HELD at 180s anyway, deliberately. In that same session mid-run recall fired, hit, and was
-// WASTED: the line pitched a filename and the session skipped it (see hit.mjs). Delivering unactionable
-// payloads more often buys nothing. The payload is fixed now; re-tune when there is evidence
-// the richer line actually gets USED — that is the measurement that should move this number,
+// HELD at 180s anyway, deliberately. A mid-run recall can fire, hit, and still be WASTED: a line
+// that pitches a filename gets skipped (see hit.mjs). Delivering unactionable payloads more often
+// buys nothing. Re-tune when there is evidence the richer line actually gets USED — that is the measurement that should move this number,
 // not the cost curve, which was never the binding constraint.
 // CONTEXT_CAP now comes from ./config.mjs — single-sourced with recall.mjs; the two MUST agree on
 // the 10K additionalContext ceiling, which is exactly why this was the first duplicated const the
@@ -83,33 +78,24 @@ function out(obj) { process.stdout.write(JSON.stringify(obj)); }
 function stagedPath(sessionId) { return path.join(stagedDir(), slug(sessionId) + '.json'); }
 
 /**
- * THE STATE-RESET BUG WAS STILL LIVE HERE.
+ * STATE GOES THROUGH `readState`, NEVER A HAND-ROLLED READER.
  *
- * `state.mjs` was written to be "ONE read/write path for all six hooks", and `recall.mjs` quotes
- * this exact body as the root cause it fixed. This hook never got the fix: it kept the hand-rolled
- * reader whose `catch` hands back a FRESH session on a torn read, while importing `readState` and
- * never calling it — a half-finished refactor that reads as done.
+ * `state.mjs` is the ONE read/write path for all six hooks. A reader whose `catch` hands back a
+ * FRESH session on a torn read would, in this hook, **durably publish the reset** (`writeState`
+ * below): one torn read would silently erase `promptCount`, `orientPending`, `orientSource`,
+ * `lastProjectAt` and `nudgedSig`, and blank `lastAssistant`. This is the worst place for it:
+ * `evaluate.mjs` is `PostToolUse`, so it fires on EVERY tool call and is both the most frequent
+ * reader and the most likely to catch a torn write. The cascades — a wiped `promptCount` fires a
+ * spurious mid-session ORIENT (and wipes the `orientPending` flag), a blanked `lastAssistant`
+ * kills the rolling-window query, and `lastEvalAt: 0` forces an unbudgeted worker spawn.
  *
- * It was the worst place to miss. `evaluate.mjs` is `PostToolUse`: it fires on EVERY tool call, so
- * it is both the most frequent reader and the most likely to catch a torn write. And unlike the
- * original, it then **durably publishes the reset** (`writeState` below): one torn read silently
- * erased `promptCount`, `orientPending`, `orientSource`, `lastProjectAt` and `nudgedSig`, and
- * blanked `lastAssistant`. The cascades are exactly the failures other fixes on this branch were
- * built to prevent — a wiped `promptCount` fires a spurious mid-session ORIENT (and wipes the
- * `orientPending` flag added to fix that), a blanked `lastAssistant` kills the rolling-window
- * query, and `lastEvalAt: 0` forces an unbudgeted worker spawn.
- *
- * It also bypassed `readState`'s CORRUPT receipt, so this hook violated the very discipline this
- * branch added: a signal must be able to observe the thing it claims. Fifth site of the same
- * defect; the census (state, hooklog, project, staged-pickup) missed the hook that runs most —
- * fix the census, not the instance.
+ * `readState`'s CORRUPT receipt is also what lets a signal observe the thing it claims.
  */
 /**
  * NOTE THE DEFAULTS, and what they do NOT list: `promptCount`, `orientPending`, `orientSource`,
  * `lastProjectAt`, `nudgedSig`. On a corrupt read those are absent from `value`, and the write-back
- * below would publish them GONE — durably. This header called the state-reset bug fixed; what was
- * fixed was the SILENCE (state.mjs logs CORRUPT), not the reset. The receipt now comes back with
- * the value, and the write is gated on it.
+ * below would publish them GONE — durably. `state.mjs` logs CORRUPT, but a log line only fixes the
+ * SILENCE, not the reset: the receipt comes back with the value, and the write is gated on it.
  */
 function loadState(sessionId) {
   return readState(sessionId, { injectedIds: [], lastAssistant: '', lastEvalAt: 0 });
@@ -134,22 +120,18 @@ function takeStaged(sessionId) {
     };
   } catch (e) {
     /**
-     * SAY IT (this discipline, wired here — censused at 1 of 6 sites).
+     * SAY IT: a fail-open fallback must report itself.
      *
      * ENOENT is the normal case — nothing staged — and stays quiet. ANYTHING ELSE is a fallback
      * that DROPS recall the worker paid two Haiku calls to find: a torn pickup (the worker writes
-     * it atomically now, but a partial legacy file or a locked read still lands here) parsed as
-     * empty and this returned `{hits: []}` in silence, indistinguishable from "the worker staged
-     * nothing". The pickup is then never re-staged, because the worker filters on `served`.
+     * it atomically, but a partial legacy file or a locked read still lands here) parsed as empty
+     * would return `{hits: []}` in silence, indistinguishable from "the worker staged nothing".
+     * The pickup is then never re-staged, because the worker filters on `served`.
      *
-     * The surrounding no-op path (debounce not elapsed, nothing staged) stays silent — but NOT for
-     * the reason this comment used to give. It argued "the rule governs FALLBACKS, not a component
-     * correctly doing nothing" — true of the old degradation-only rule in isolation, and exactly the
-     * carve-out the merge removed: this discipline's first half (existence — ran vs. never fired) governs existence, so a component doing nothing
-     * still owes evidence that it ran. The silence is legitimate here for a different and narrower
-     * reason — the DEBOUNCE makes it countable (see the `!didSpawn` guard in main()). Kept
-     * wrong-and-corrected: a reviewer endorsed the old reasoning, and the rule it leaned on was
-     * retired one round later.
+     * The surrounding no-op path (debounce not elapsed, nothing staged) stays silent — but NOT
+     * because "the rule governs FALLBACKS, not a component correctly doing nothing": a component
+     * doing nothing still owes evidence that it ran. The silence is legitimate here for a
+     * narrower reason — the DEBOUNCE makes it countable (see the `!didSpawn` guard in main()).
      */
     if (e.code !== 'ENOENT') {
       hlog('evaluate', `staged pickup UNREADABLE (${e.code || e.message}) — recall DROPPED for this tick`, sessionId);
@@ -163,7 +145,7 @@ async function main() {
   try { input = JSON.parse(stdinText); } catch { hlog('evaluate', 'skip: unparseable stdin'); return; }
   const sessionId = input.session_id || 'nosession';
   const transcriptPath = input.transcript_path || '';
-  // silence-ok: no credential → nothing to recall against. this discipline's first half (existence — ran vs. never fired) is satisfied ELSEWHERE
+  // silence-ok: no credential → nothing to recall against. The receipt rule's first half (existence — ran vs. never fired) is satisfied ELSEWHERE
   // and deliberately: `!API_KEY` is a GLOBAL condition, and recall.mjs logs `skip: no
   // VECTROS_API_KEY` once per prompt — so "the loop is unconfigured" is already observable, and a
   // per-tool-call duplicate here would be noise, not information. (If a key IS present this line
@@ -218,7 +200,7 @@ async function main() {
     if (lines.length === 0 && !contradiction) { hlog('evaluate', 'workers OFF (WORKERS_OFF present) — no spawn', sessionId); return; }
   } else if (!transcriptPath) {
     /**
-     * this discipline's first half (existence — ran vs. never fired), and it is the FOUNDING STORY waiting to happen again.
+     * The receipt rule's first half (existence — ran vs. never fired), and it is the FOUNDING STORY waiting to happen again.
      *
      * This hook's entire trigger hangs off one field. `transcript_path` absent or renamed => the
      * spawn branch below never runs => `didSpawn` stays false => the guard returns in silence,
@@ -227,7 +209,7 @@ async function main() {
      * `prompt`), in the same system, on the same class of field.
      *
      * ONCE per session, not per invocation: this fires on every tool call, so an unconditional
-     * line would drown the log this discipline exists to keep readable. Once is the countable form here —
+     * line would drown the log the receipt rule exists to keep readable. Once is the countable form here —
      * the condition is static for the session, so repeating it adds noise, not information.
      * Log the payload SHAPE, which is the line that identifies a contract mismatch.
      */
@@ -284,7 +266,7 @@ async function main() {
     /**
      * silence-ok on the `!didSpawn` path — the DEBOUNCE is what makes it countable.
      *
-     * this discipline's first half (existence — ran vs. never fired) demands that *never fired* and *fired and no-op'd* be distinguishable, not
+     * The receipt rule's first half (existence — ran vs. never fired) demands that *never fired* and *fired and no-op'd* be distinguishable, not
      * that every invocation emit a line. Here the debounce supplies the heartbeat by construction:
      * this hook fires per tool call, but any active session crosses EVAL_DEBOUNCE_MS within 180s and
      * emits the spawn line below. So a LIVE hook logs on a bounded clock and a DEAD one logs
@@ -384,16 +366,16 @@ async function main() {
  *
  * This was `main().catch(() => {})`. ANY throw anywhere in main() lands here, so a hook that dies
  * on line one and a hook that ran perfectly and had nothing to say produced the SAME observable:
- * nothing. That is the founding story behind this discipline (a recall hook read the wrong field name and no-op'd for a
+ * nothing. That is the founding story behind the receipt rule (a recall hook read the wrong field name and no-op'd for a
  * week) sitting on the outermost line of six different hooks — including, pointedly,
  * `recall-eval-worker.mjs`, whose own comment names a bug this construct swallowed.
  *
- * It was also invisible to this discipline's own ENFORCER: `receipt-lint-test.mjs` matched only `catch (e) {` and
+ * It was also invisible to the receipt rule's own ENFORCER: `receipt-lint-test.mjs` matched only `catch (e) {` and
  * consumed `(() => {})` as the optional binding, landing on `;` where it wanted `{`, and skipping
  * the block entirely. Six swallows, zero findings, green build. The lint reads arrow handlers now.
  *
  * Exit stays 0 and nothing rethrows: a hook must never break the user's turn. The log is the whole
- * remedy — it makes "dead" distinguishable from "quiet", which is all this discipline ever asks.
+ * remedy — it makes "dead" distinguishable from "quiet", which is all the receipt rule ever asks.
  */
 main().catch((e) => {
   try { hlog('evaluate', `hook CRASHED (${e?.code || e?.name || 'error'}) — this invocation did NOTHING: ${e?.message || e}`); }

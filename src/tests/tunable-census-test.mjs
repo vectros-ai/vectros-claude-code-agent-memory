@@ -2,8 +2,8 @@
 /**
  * THE TUNABLE CENSUS — no numeric knob may live as a source `const` again.
  *
- * WHY A MACHINE HOLDS THIS AND NOT A PARAGRAPH. The whole argument is that after the build bundles
- * the source, a `const` in a hook file is **unreachable to an adopter** — there is no
+ * WHY A MACHINE HOLDS THIS AND NOT A PARAGRAPH. The whole argument is that once the package is
+ * built and installed, a `const` in a hook file is **unreachable to an adopter** — there is no
  * supported way for them to change it at all. So the cost of one missed extraction is not untidy
  * code, it is a knob that becomes un-turnable at publish and whose later extraction is a change to
  * a public config surface (doing it after publication is materially
@@ -204,12 +204,12 @@ eq('every knob has a real floor or ceiling', unbounded.length, 0);
 // ─────────────────────────────────────────────────────────────────────────────
 console.log('\n=== 5. tunables() exposes exactly SPEC\'s keys, and the NAMED exports match ===');
 /**
- * WHAT THIS CHECKS, and what it deliberately no longer does.
+ * WHAT THIS CHECKS, and what it deliberately does not.
  *
- * A key-set equality between `tunables()` and `SPEC` was here and has been REMOVED rather than
- * annotated: `resolveConfig` assigns `values[key]` for every SPEC key on both branches, so it could
- * not fail by construction. It was kept once with a comment saying so, which is worse than deleting
- * it — a reader counts it as coverage, and an assertion that cannot fail is noise on the one file
+ * It does NOT assert a key-set equality between `tunables()` and `SPEC`: `resolveConfig` assigns
+ * `values[key]` for every SPEC key on both branches, so such an assertion could not fail by
+ * construction. Keeping it with a comment saying so is worse than omitting it — a reader counts
+ * it as coverage, and an assertion that cannot fail is noise on the one file
  * whose job is to be believable.
  *
  * What replaces it is reachability, which CAN fail: every SPEC key must be readable by a consumer,

@@ -45,20 +45,18 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 
 /**
- * EVERY MODEL-AUTHORED FIELD GETS THE SAME TREATMENT, and this exists because the last two rounds
- * of that lesson were applied one field at a time.
+ * EVERY MODEL-AUTHORED FIELD GETS THE SAME TREATMENT, not one field at a time.
  *
- * `title` and `body` were capped and whitespace-collapsed; `kind`, `dest` and `revises` were
- * interpolated RAW onto the very same bullet line. All five come verbatim from the distiller
- * (`capture-worker.mjs`), so the distinction was never about provenance — only about which field
- * someone had gotten around to. MEASURED on the shipped module: 12 pending with 5000-char `kind`
- * rendered a **185,777-character** block, and a newline inside `kind` escapes the bullet and lands
- * arbitrary text at column 0 of `additionalContext`.
+ * `title`, `body`, `kind`, `dest` and `revises` all come verbatim from the distiller
+ * (`capture-worker.mjs`), so the distinction is never about provenance. Capping and collapsing
+ * only some of them while interpolating the rest RAW onto the very same bullet line is a hazard:
+ * 12 pending with 5000-char `kind` rendered a **185,777-character** block, and a newline inside
+ * `kind` escapes the bullet and lands arbitrary text at column 0 of `additionalContext`.
  *
- * That is verbatim the hazard NUDGE_TITLE_MAX_CHARS's own comment describes — *"a newline in a distiller title
- * breaks out of its bullet ... a candidate could forge whatever structure it liked inside the
- * block"* — sitting unaddressed on the line below it. And it falsified NUDGE_MAX: the cap bounds
- * the COUNT of candidates, which bounds nothing if a single candidate is unbounded.
+ * That is verbatim the hazard the `title` cap in `renderNudge` below guards against — *"a newline
+ * in a distiller title breaks out of its bullet ... a candidate could forge whatever structure it
+ * liked inside the block"*. And it would falsify NUDGE_MAX: the cap bounds the COUNT of candidates,
+ * which bounds nothing if a single candidate is unbounded.
  *
  * So: one helper, applied to every model-authored field, so the next field added cannot be the
  * one that gets forgotten — fix the census, not the instance.
@@ -126,16 +124,15 @@ export function renderNudge(pending, sessionId) {
     /**
      * CAP AND COLLAPSE THE TITLE TOO.
      *
-     * `body` got both treatments; `title` — rendered on the same line, from the same
-     * model-authored JSON — got neither. A newline in a distiller title breaks out of its bullet
-     * and lands in `additionalContext` verbatim, bounded only by the 9500c budget, so a candidate
-     * could forge whatever structure it liked inside the block.
+     * `title` is rendered on the same line as `body`, from the same model-authored JSON, so it
+     * needs both treatments. A newline in a distiller title breaks out of its bullet and lands in
+     * `additionalContext` verbatim, bounded only by the 9500c budget, so a candidate could forge
+     * whatever structure it liked inside the block.
      *
-     * The rule was already derived ~150 lines away in recall-eval-worker's contradiction cap
-     * ("CAP it. Every HIT is capped ... while this was unbounded") and not applied here. Sharpest
-     * because evaluate.mjs argues recall is FYI while the nudge "demonstrably gets acted on": the
-     * one channel identified as reliably obeyed was the one with an uncapped field.
-     * Same census defect, same shape, as the other sites this fix swept up.
+     * The same rule holds in recall-eval-worker's contradiction cap ("CAP it. Every HIT is
+     * capped"). It matters most here because evaluate.mjs argues recall is FYI while the nudge
+     * "demonstrably gets acted on": the channel most reliably obeyed must not have an uncapped
+     * field.
      */
     const title = field(c.title || '(untitled)', NUDGE_TITLE_MAX_CHARS);
     const body = String(c.body || '').replace(/\s+/g, ' ').trim();
@@ -153,14 +150,14 @@ export function renderNudge(pending, sessionId) {
   if (rest) lines.push(`  … and ${rest} more not shown — \`--list\` below has all of them.`);
   lines.push(
     /**
-     * TWO QUESTIONS, NOT ONE — and the second used to be missing entirely.
+     * TWO QUESTIONS, NOT ONE.
      *
-     * This block said "verify the claim against the repo", which sounds sufficient and is not: a
-     * DOC is in the repo. A settling session once did exactly that, checked two repo docs, and
-     * disposed a TRUE candidate as `ignored:PREMISE IS FALSE` — because both docs were STALE. It
-     * verified against a description of the system instead of the system.
+     * "Verify the claim against the repo" sounds sufficient and is not: a DOC is in the repo. A
+     * settling session that checks two repo docs can dispose a TRUE candidate as
+     * `ignored:PREMISE IS FALSE` because both docs are STALE — it verified against a description
+     * of the system instead of the system.
      *
-     * So the instruction now names the DECIDING ARTIFACT: the thing that actually determines the
+     * So the instruction names the DECIDING ARTIFACT: the thing that actually determines the
      * behaviour, not the thing that documents it. For a CI claim that is the CI config file itself
      * plus whatever variables/secrets actually control that run — not a reference doc about CI.
      * Docs lag; the artifact does not.
@@ -181,7 +178,7 @@ export function renderNudge(pending, sessionId) {
      * STATE THE ASYMMETRY. The dispositions are not equally risky and the ordering is the opposite
      * of what intuition suggests: `stored` feels like the committing one, so it gets the caution —
      * but it is reversible AND machine-verified, while `ignored` is neither. The costly error is
-     * dismissing something true, and nothing about the old wording said so.
+     * dismissing something true, and the wording must say so.
      */
     'THE DISPOSITIONS ARE NOT SYMMETRIC — hold `ignored` to a HIGHER bar than `stored`, not a lower one:',
     '  • `stored`  — REVERSIBLE (delete the record) and MACHINE-VERIFIED (read back from the store; a bogus ' +
@@ -235,17 +232,17 @@ export function renderOrphanNudge(orphan, ageHours) {
   const shown = orphan.pending.slice(0, NUDGE_ORPHAN_MAX);
   const rest = orphan.pending.length - shown.length;
   /**
-   * THE OPENING LINE USED TO READ "THIS IS NOT YOUR SESSION'S WORK", AND THAT WAS THE BUG.
+   * THE OPENING LINE MUST NOT READ "THIS IS NOT YOUR SESSION'S WORK".
    *
    * Observed over real sweeps: every session wants to defer disposition until something forces the
    * issue. Orphaned memories are a shared responsibility, and there is no other session better
    * positioned to dispose of them — every real settlement observed happened only when that case was
    * argued explicitly, against the agent's default inclination to defer.
    *
-   * The prompt was arguing the other side. It opened by telling the reader this was NOT their work —
-   * a licence to defer, in the first clause, where it carries the most weight — and then contradicted
-   * itself four clauses later with "you are that someone". Given a mixed signal and a real task
-   * competing for attention, deferring is the rational read, and that is what agents did.
+   * A prompt that opens by telling the reader this is NOT their work gives a licence to defer in
+   * the first clause, where it carries the most weight, and contradicts itself later with "you are
+   * that someone". Given a mixed signal and a real task competing for attention, deferring is the
+   * rational read.
    *
    * So: state the commons plainly, and kill the specific false belief that makes deferral feel safe —
    * that a better-positioned session exists. There isn't one. The queue goes to whoever is here, and
@@ -284,10 +281,9 @@ export function renderOrphanNudge(orphan, ageHours) {
     'Judge each on its merits, and be MORE sceptical than usual — you cannot check these against your own ' +
       'recollection of the session, only against the artifacts.',
     // THE SAME TWO RULES AS THE ORDINARY NUDGE, and this block needs them MORE. Its reader was not in
-    // the session, so a stale doc is the only thing they have to be misled by. The first version said
-    // 'verify the claim' and 'against the repo' — verbatim the wording already proved
-    // insufficient — and mentioned neither the cited-ignore form nor the undo. The population most
-    // likely to dismiss a true candidate had been given the weakest rules.
+    // the session, so a stale doc is the only thing they have to be misled by. Generic wording
+    // ('verify the claim', 'against the repo') is insufficient, as is omitting the cited-ignore form
+    // and the undo: the population most likely to dismiss a true candidate needs the strongest rules.
     '  1. IS IT TRUE?  Verify against the DECIDING ARTIFACT — the config, the code, or the live state that ' +
       'determines the behaviour. NOT a doc that describes it: docs go stale, and you have no memory of this ' +
       'session to cross-check them against. (A CI claim is settled by the CI config file + the live CI ' +
@@ -295,9 +291,9 @@ export function renderOrphanNudge(orphan, ageHours) {
     '  2. IS IT ALREADY KNOWN?  Search the store / the golden docs before adding a near-duplicate.',
     'Routing as always: a shareable engineering lesson is a REPO DOC edit (the file is golden, the KB indexes ' +
       'it); private/churny operational context is a `memory` record.',
-    // This used to call `ignored` outright IRREVERSIBLE two lines above printing the `--reopen`
-    // undo command — true-ish, but together they read as "never dismiss anything", which is not
-    // the intent; "comes back ONLY if a later reader notices" is the more honest claim.
+    // Calling `ignored` outright IRREVERSIBLE two lines above printing the `--reopen` undo command
+    // is true-ish, but together they read as "never dismiss anything", which is not the intent;
+    // "comes back ONLY if a later reader notices" is the more honest claim.
     'AND THE DISPOSITIONS ARE NOT SYMMETRIC — `stored` is reversible and machine-verified; `ignored` ' +
       'leaves the queue and comes back ONLY if some later reader notices and runs `--reopen`. Assume ' +
       'nobody will. So `ignored` earns the HIGHER bar — cite it, and the citation gets checked:',

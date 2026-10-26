@@ -1,7 +1,7 @@
 // Answer-triage: does judging the ANSWER actually change what reaches the agent?
 //
-// The interesting cases all produce SILENCE or an INTERRUPT — neither of which the old code
-// could express. Drives the real evaluate.mjs injector against staged payloads, and unit-tests
+// The interesting cases all produce SILENCE or an INTERRUPT (a contradiction), not a hit list.
+// Drives the real evaluate.mjs injector against staged payloads, and unit-tests
 // the worker's id-filtering directly (the worker's model call needs a real binary; the fake-.cmd
 // seam is unusable on Windows — spawning a .cmd shim there shifts the effective cwd out from
 // under the fake).
@@ -29,29 +29,30 @@ fs.writeFileSync(T, JSON.stringify({ type: 'user', message: { content: [{ type: 
 const reset = () => { for (const f of [STAGED, STATE]) { try { fs.unlinkSync(f); } catch {} } };
 
 /**
- * TWO REAL BUGS FOUND HERE (CI-only symptom, both live on any machine with a real credential):
+ * TWO HARNESS REQUIREMENTS (the symptoms are CI-only, but both apply on any machine with a real
+ * credential):
  *
- * 1. `VECTROS_WORKERS_OFF` (the env var this file used to set below) is not a thing —
- *    `workersDisabled()` (creds.mjs) only ever checks the `WORKERS_OFF` FILE marker
- *    (`workersOffFile()`). The env var was silently inert, so every `inject()` call below, on any
- *    machine with a real credential resolvable, was letting `evaluate.mjs` fall through to its
- *    real debounced trigger and fire-and-forget spawn a REAL `recall-eval-worker.mjs` — a real
- *    `claude -p` Haiku call — in the background. It never touched what THIS file asserts (the
- *    injector reads the pre-staged payload synchronously, independent of that spawn), so it never
- *    showed up as a failure locally — only as uncounted spend and a non-hermetic "unit" test.
- * 2. `evaluate.mjs:181`'s `if (!API_KEY) return` exits before the injector ever runs, and does so
+ * 1. Workers are disabled by the `WORKERS_OFF` FILE marker only: `workersDisabled()` (creds.mjs)
+ *    checks `workersOffFile()`, so a `VECTROS_WORKERS_OFF` env var would be silently inert. Without
+ *    the marker, every `inject()` call below, on any machine with a real credential resolvable,
+ *    lets `evaluate.mjs` fall through to its real debounced trigger and fire-and-forget spawn a
+ *    REAL `recall-eval-worker.mjs` — a real `claude -p` Haiku call — in the background. It never
+ *    touches what THIS file asserts (the injector reads the pre-staged payload synchronously,
+ *    independent of that spawn), so it would never show up as a failure locally — only as
+ *    uncounted spend and a non-hermetic "unit" test.
+ * 2. `evaluate.mjs`'s `if (!API_KEY) return` exits before the injector ever runs, and does so
  *    SILENTLY by design (see evaluate.mjs's own comment) — so on a CI runner with no real
  *    credential configured (the correct default for this package's public OSS CI), every
- *    `inject()` call below returns an empty context. That empties tests 2-5 identically, which is
- *    exactly the CI-only failure this fixes; an author machine with a real credential never took
- *    this branch, hence "passes for everyone but CI."
+ *    `inject()` call below would return an empty context and empty tests 2-5 identically — a
+ *    CI-only failure; a machine with a real credential never takes this branch, hence "passes for
+ *    everyone but CI."
  *
- * Fixed together: a real FILE marker actually disables the worker spawn (so this test is finally
- * hermetic — no more background inference on every local run either), and a fake, test-shaped key
- * (this repo's own `TEST_KEY_RE` convention, `sk_test_…`) gets the injector's guard open safely —
- * safely BECAUSE the file marker above means `evaluate.mjs` never reaches a real network call with
- * it. Restored afterward: `run-all.mjs` shares one isolated root across every test file in a run,
- * so leaving the marker behind would silently disable workers for whichever file runs next.
+ * So: a real FILE marker disables the worker spawn (so this test is hermetic — no background
+ * inference on a local run either), and a fake, test-shaped key (this repo's own `TEST_KEY_RE`
+ * convention, `sk_test_…`) gets the injector's guard open safely — safely BECAUSE the file marker
+ * above means `evaluate.mjs` never reaches a real network call with it. Restored afterward:
+ * `run-all.mjs` shares one isolated root across every test file in a run, so leaving the marker
+ * behind would silently disable workers for whichever file runs next.
  */
 const OFF = workersOffFile();
 const hadOff = fs.existsSync(OFF);

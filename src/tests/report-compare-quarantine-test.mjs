@@ -4,10 +4,9 @@
  * quarantined as `unspooled` — the bucket that means "the dual-write never happened, this is a
  * real bug". A quarantined candidate DOES have a spool entry (it was gated, not skipped), so
  * folding it into `unspooled` would trip `--compare`'s `*** N SESSION(S) DIVERGE ***` alarm on a
- * session where the gate is working exactly as designed. Found during independent review: an
- * earlier version of this file documented a `quarantined` bucket in `report.mjs`'s own header
- * comment without ever actually wiring it into `compareSession()`'s classification logic — the
- * comment described intended behavior nothing in the code implemented yet.
+ * session where the gate is working exactly as designed. The `quarantined` bucket documented in
+ * `report.mjs`'s own header comment must actually be wired into `compareSession()`'s
+ * classification logic; this test is what proves the code implements what the comment describes.
  */
 import fs from 'node:fs';
 import path from 'node:path';

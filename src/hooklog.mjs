@@ -16,6 +16,10 @@
  * A fail-open component MUST say what it did. The log is the receipt. Keep it to ONE line:
  * cheap enough to always be on, and greppable when a hook "does nothing".
  *
+ * That is "the receipt rule" other comments in this package refer to. It has two halves:
+ * EXISTENCE (ran vs. never fired: a component that fires and no-ops must still be countable) and
+ * DEGRADATION (say what you did when you fell back: missing is not the same as broken).
+ *
  * Never throws (an observability failure must not break the thing it observes).
  *
  * TEST-MODE REDIRECT. Every hook here calls `hlog` on every failure path it exercises, so
@@ -46,17 +50,10 @@ export function logPath() {
  * its own receipt), so a named import here would be a temporal-dead-zone read. `tunables()` is
  * re-entrancy-safe by construction. → config.mjs § tunables.
  *
- * ROLL ASIDE, DO NOT TRIM. This was `rotateAtomic(LOG, KEEP_LINES = 2000)` — keep the last 2000
- * lines, discard the rest. The discard is a real defect on the one instrument that tells us whether
- * any hook works, and it would fire the moment the log crossed the threshold.
- *
- * It had NOT fired yet (the log sits under it), and the change's original justification — that the
- * discard explained a ~21h log span — was FALSE: the log spans its own lifetime, and the state
- * files are older only because `orient.mjs` was wired earlier. → atomic.mjs § rollAtomic for the
- * full correction. Fixing a latent landmine is right; the reason given for it was not.
- *
- * Now the whole file is renamed aside and GENERATIONS are kept, and `logGenerations()` lets a
- * reader span the lot.
+ * ROLL ASIDE, DO NOT TRIM. Trimming the log to its last N lines would discard history on the one
+ * instrument that tells us whether any hook works, and would do so the moment the log crossed the
+ * threshold. Instead the whole file is renamed aside (`rollAtomic`, see atomic.mjs) and
+ * GENERATIONS are kept, and `logGenerations()` lets a reader span the lot.
  */
 // A hoisted DECLARATION, not a `const` arrow — same TDZ rule as atomic.mjs's `_ia`. `config.mjs`
 // imports `hlog` from this file, so during the cycle's bootstrap `reportConfig` calls `hlog`, which
@@ -87,5 +84,5 @@ export function hlog(hook, msg, sessionId) {
     } catch { /* silence-ok: no log yet — statSync ENOENT is the normal first-write case, and appendFileSync below creates it. Nothing is lost. */ }
     const sid = sessionId ? ` [${String(sessionId).slice(0, SID_DISPLAY_LEN)}]` : '';
     fs.appendFileSync(log, `${new Date().toISOString()} ${hook.padEnd(9)}${sid} ${msg}\n`);
-  } catch { /* silence-ok: THE one catch that cannot obey this discipline — this IS the logger, so its only receipt channel is itself. Observability must never break the hook it observes; a lost line is the accepted floor of the whole scheme. */ }
+  } catch { /* silence-ok: THE one catch that cannot obey the receipt rule — this IS the logger, so its only receipt channel is itself. Observability must never break the hook it observes; a lost line is the accepted floor of the whole scheme. */ }
 }

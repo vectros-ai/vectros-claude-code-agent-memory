@@ -1,21 +1,15 @@
 // The FAILURE half of the drain. Read this header before "fixing" the seam.
 //
-// WHAT THIS FILE IS NOT — and used to claim to be. Its header said it drove "the REAL
-// capture-worker against a fake claude … the drain loop, the watermark arithmetic and the
-// failure-hold are exercised for real". It never ran the drain once. It spawns a fake via
-// `fake-claude.cmd`, and `capture-worker` calls `spawnSync(CLAUDE_BIN, …)` WITHOUT `shell: true`,
-// which Node >=18.20.2 refuses for `.cmd` (CVE-2024-27980). So the spawn failed, `distill`
-// returned `{error}`, the drain stopped before window 1 — and the file printed
-// `*** 1000 MESSAGES NEVER SEEN ***` and exited 0. Its single "PASS" was `Math.min(...[])` over an
-// empty set: `Infinity >= 194` is true. **It passed BECAUSE it collected nothing.**
+// WHAT THIS FILE IS NOT: it does not drive the drain loop to completion against a fake `claude`.
+// A fake spawned via `fake-claude.cmd` cannot work, because `capture-worker` calls
+// `spawnSync(CLAUDE_BIN, …)` WITHOUT `shell: true`, which Node >=18.20.2 refuses for `.cmd`
+// (CVE-2024-27980). The spawn fails, `distill` returns `{error}`, and the drain stops before
+// window 1. A test built on that seam that collects nothing can pass vacuously (a `Math.min(...[])`
+// over an empty set: `Infinity >= 194` is true) — **it would pass BECAUSE it collected nothing**,
+// and stay green with `capture-worker` reverted to tail-slice + `markCaptured(total)`.
+// triage-test's own header and `drain-real-test.mjs`, which exists *because* of this, say the same.
 //
-// That was a false green on this branch's marquee fix: revert `capture-worker` to tail-slice +
-// `markCaptured(total)` and the old file stayed green. Three places in the SAME COMMIT already
-// said the fake-binary seam was unusable on Windows — triage-test's own header, and
-// `drain-real-test.mjs`, which exists *because* of it. Found after initial disagreement,
-// resolved by checking the spawn semantics directly.
-//
-// WHAT IT IS NOW. A distiller that CANNOT RUN is a real scenario — a moved `claude.exe`, a wrong
+// WHAT IT IS. A distiller that CANNOT RUN is a real scenario — a moved `claude.exe`, a wrong
 // `CLAUDE_CODE_BIN`, an expired token — and it is the path that must never advance the watermark.
 // The unspawnable seam reproduces it faithfully, so this file tests exactly that, and ASSERTS it.
 //

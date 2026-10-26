@@ -30,8 +30,7 @@
  * ALL-OR-NOTHING **validation**. Every spec is verified BEFORE any write, so one typo in arg 4
  * cannot leave args 2-3 applied and the rest not. NOTE the precise scope: this covers VALIDATION
  * failures, which is the reachable case. If a WRITE itself fails midway, earlier specs already
- * landed and this returns non-zero — partial application. The header used to claim that could not
- * happen.
+ * landed and this returns non-zero — partial application.
  *
  * `cN` ADDRESSES A RECORD, NOT A LINE IN A FILE. The candidate corpus lives
  * in Vectros records; a `cN` is a stable ordinal over ALL of a session's candidates ever
@@ -63,9 +62,9 @@ import { queueDir, slug, SID_DISPLAY_LEN, memoryHome } from './paths.mjs';
 import { DISPOSE_TIMEOUT_MS, DISPOSE_STORED_RECENCY_MIN, NUDGE_TITLE_MAX_CHARS, NUDGE_FIELD_MAX_CHARS, QUEUE_BODY_MAX_CHARS } from './config.mjs';
 
 /**
- * PREFIX RESOLUTION — before this, pasting an `ORPHAN-NUDGE` line's 8-char id straight into
- * `dispose.mjs` did not error: `bySession` does an EXACT `sessionId` field match, so a prefix
- * simply matched zero records and rendered "No pending candidates", identical to a genuinely
+ * PREFIX RESOLUTION — pasting an `ORPHAN-NUDGE` line's 8-char id straight into `dispose.mjs`
+ * must not fail silently: `bySession` does an EXACT `sessionId` field match, so a prefix would
+ * simply match zero records and render "No pending candidates", identical to a genuinely
  * empty queue. That is a false negative in the same shape this whole file exists to refuse
  * elsewhere: a read that LOOKS like a confirmed empty state but is actually "the query didn't run
  * against the right scope". Silent is the failure mode this file refuses everywhere else
@@ -89,14 +88,14 @@ import { DISPOSE_TIMEOUT_MS, DISPOSE_STORED_RECENCY_MIN, NUDGE_TITLE_MAX_CHARS, 
  * exactly the prefix of the slugged string, which is what makes finding the right FILE reliable
  * even for an id containing a slug-affected character (a colon, a space, ...).
  *
- * ONLY WHEN EXACTLY ONE CANDIDATE SURVIVES does resolution proceed — this is the fix for a real
- * bug: an earlier version checked "does a literal file exist?" FIRST
- * and returned it immediately, without ever checking whether that same literal input could ALSO be
- * a truncated prefix of some other, longer session's id sitting in the same directory. Two
- * candidates for one input is exactly as unresolvable as a genuine multi-way prefix collision, and
- * silently preferring the literal interpretation would have been the exact silent failure mode
- * this whole function exists to refuse. Now a literal match and a prefix match compete in the same
- * set, so a real collision between them surfaces as "ambiguous", never gets silently decided.
+ * ONLY WHEN EXACTLY ONE CANDIDATE SURVIVES does resolution proceed. Checking "does a literal file
+ * exist?" FIRST and returning it immediately would never check whether that same literal input
+ * could ALSO be a truncated prefix of some other, longer session's id sitting in the same
+ * directory. Two candidates for one input is exactly as unresolvable as a genuine multi-way prefix
+ * collision, and silently preferring the literal interpretation would be the exact silent failure
+ * mode this whole function exists to refuse. So a literal match and a prefix match compete in the
+ * same set, and a real collision between them surfaces as "ambiguous", never gets silently
+ * decided.
  *
  * Finding the file is still not the same as knowing the exact raw id — `slug` is LOSSY (`a:b` and
  * `a_b` slug to the same filename), so a filename cannot in general be reversed back into the one
@@ -112,9 +111,9 @@ import { DISPOSE_TIMEOUT_MS, DISPOSE_STORED_RECENCY_MIN, NUDGE_TITLE_MAX_CHARS, 
  * local queue file at all (a record-only session — see `backupToFile` above for how that
  * happens). Nothing at this point in `main()` has made a records call yet, so there is no way to
  * distinguish that from an unresolvable prefix without one; refusing (never guessing) is the same
- * answer the old code gave in every other unreachable-address case in this file. A future version
- * could close this by trying the literal id against records first, at the cost of an extra round
- * trip on every short-id call — not done here.
+ * answer as every other unreachable-address case in this file. Closing this would take trying the
+ * literal id against records first, at the cost of an extra round trip on every short-id call; that
+ * is not done.
  */
 function resolveSessionId(input) {
   if (!input) return { error: 'empty session id' }; // defensive: main() already guards this, but this function should not trust that.
@@ -132,9 +131,9 @@ function resolveSessionId(input) {
   }
   const slugged = slug(input);
   // A literal short id's own file always starts with its own (slugged) name, so it is always one
-  // of these candidates — there is no separate "check the literal first" branch anymore. That is
-  // the fix: a literal match and a colliding longer sibling's prefix match now compete in the SAME
-  // set, so a real collision surfaces as ambiguous instead of the literal silently winning.
+  // of these candidates — there is no separate "check the literal first" branch. A literal match
+  // and a colliding longer sibling's prefix match compete in the SAME set, so a real collision
+  // surfaces as ambiguous instead of the literal silently winning.
   const matches = names.filter((n) => n.endsWith('.jsonl') && n.slice(0, -'.jsonl'.length).startsWith(slugged)).map((n) => n.slice(0, -'.jsonl'.length));
   if (matches.length === 0) {
     return { error: `no session found matching "${input}" (checked local queue filenames under ${queueDir()}). `
@@ -157,17 +156,17 @@ function resolveSessionId(input) {
 }
 
 /**
- * THE ADDRESS SPACE, since the full flip — records, not the file.
+ * THE ADDRESS SPACE — records, not the file.
  *
  * `bySession` numbers ALL of a session's candidates ever, settled included, so an ordinal
  * (`c1`, `c2`, ...) is a real, STABLE address: `c2` stays `c2` for the life of the session even
- * after `c1` settles. That is the same guarantee the file-backed queue gave; it is now sourced
- * from the record store instead of the local append log. → candidates.mjs `withOrdinals` header.
+ * after `c1` settles. The local append log gives the same guarantee; here it is sourced from the
+ * record store. → candidates.mjs `withOrdinals` header.
  *
  * UNREACHABLE RECORDS ⇒ `state: 'unreachable'`, and every caller refuses rather than guesses —
- * the same "no nudge is safer than a wrong nudge" refusal the file version used for a corrupt
- * queue. Addressing now LIVES in the record store; if it cannot be read, nothing here can safely
- * resolve a `cN` to anything, so pretending otherwise is not an option.
+ * the same "no nudge is safer than a wrong nudge" refusal used for a corrupt queue. Addressing
+ * LIVES in the record store; if it cannot be read, nothing here can safely resolve a `cN` to
+ * anything, so pretending otherwise is not an option.
  */
 async function readRecords(sessionId) {
   const rows = await bySession(sessionId);
@@ -182,12 +181,12 @@ async function readRecords(sessionId) {
 /**
  * BACK UP THE SETTLEMENT TO THE LOCAL FILE — best-effort, loud on failure, never blocking.
  *
- * Inverted from this function's earlier shape (`patchRecordToo`): the RECORD write is now
- * the operation that determines whether dispose.mjs succeeds (see Phase 2 in `main()`), and this
- * call is what makes the local file agree with it afterward — the mirror image of
- * capture-worker.mjs's propose-side shape (record-first, file best-effort, counted and loud, never
- * silently swallowed). The file's only remaining jobs are durability if records is unreachable at
- * a future read, and the input `report.mjs --compare` audits against.
+ * The RECORD write is the operation that determines whether dispose.mjs succeeds (see Phase 2 in
+ * `main()`), and this call is what makes the local file agree with it afterward. (The propose side
+ * runs the other way: capture-worker.mjs writes the queue first and the record afterward via the
+ * spool.) The file's jobs here are durability if records is unreachable at a future read, and the
+ * input `report.mjs --compare` audits against; a failed backup is loud, never silently
+ * swallowed.
  *
  * Resolves the file's OWN positional id (`c7`, independent of and unrelated to the record ordinal
  * just used to address this candidate) by matching `externalId` — the one field both stores carry
@@ -217,8 +216,7 @@ async function backupToFile(sessionId, label, externalId, ev) {
 /**
  * Same untrusted-field rule as nudge.mjs's `field()` and hit.mjs's `clean()`/`cut()` — a
  * candidate's title/body/kind/dest/sourceRef is model-authored text with no length bound of its
- * own, and this is the second place in the codebase that renders it verbatim (found during this
- * package's public-readiness pass; nudge.mjs already had the fix, this CLI's own listing didn't). Newline
+ * own, and this CLI's listing renders it verbatim (as nudge.mjs does). Newline
  * collapse is the load-bearing half — a raw newline in a title/sourceRef would visually splice one
  * candidate's listing into the next. The cap is a safety ceiling against pathological input, not a
  * budget squeeze: unlike nudge.mjs's injected-context line, this is a terminal the OPERATOR reads
@@ -278,12 +276,11 @@ async function recordExists(id, { requireRecent = true } = {}) {
      * injects REAL record uuids into the agent's context on every hit, so the id most likely to be
      * pasted by mistake is a real one belonging to something else.
      *
-     * `tests/dispose-test.mjs` demonstrated it: it settled a candidate titled "stored path" with
-     * the uuid of a real, unrelated, already-existing memory record — a pinned memory covering a
-     * completely different topic. Unrelated content, exit 0, asserted as correct. The test meant
-     * to catch this proved the hole instead, and called it a pass.
+     * Without these checks a candidate titled "stored path" could be settled with the uuid of a
+     * real, unrelated, already-existing memory record — a pinned memory covering a completely
+     * different topic — with exit 0.
      *
-     * Checked now: the id echoes, and the record IS a memory (a `document`/ADR id is the shape of
+     * Checked: the id echoes, and the record IS a memory (a `document`/ADR id is the shape of
      * the mistake this catches). Neither is sufficient — a real, unrelated MEMORY uuid still
      * passes — so `recentlyWritten` below carries the real weight: a candidate you just stored is
      * a record you just wrote.
@@ -311,21 +308,21 @@ async function recordExists(id, { requireRecent = true } = {}) {
 }
 
 /**
- * Verify an `ignored:covered:<ref>` citation — the fix for the ONE-WAY DOOR BEING THE UNLOCKED ONE.
+ * Verify an `ignored:covered:<ref>` citation — the gate on the ONE-WAY DOOR, which would otherwise
+ * be the unlocked one.
  *
- * THE FAILURE MODE THIS CLOSES. A settling session once disposed 29 candidates and got one wrong in the most
- * expensive direction: it disposed a TRUE candidate as `ignored:PREMISE IS FALSE`, citing two repo
- * docs that were themselves STALE. `ignored` is never re-offered, so the candidate was destroyed —
- * and nothing in this file even looked at the reason. Note the asymmetry that made it possible:
+ * THE FAILURE MODE THIS CLOSES: disposing a TRUE candidate as `ignored:PREMISE IS FALSE`, citing
+ * docs that are themselves STALE. `ignored` is never re-offered, so the candidate is destroyed —
+ * and nothing would look at the reason. Note the asymmetry that makes it possible:
  *
  *   stored:<uuid>     REVERSIBLE (delete the record) and MACHINE-VERIFIED — read back, id echoed,
  *                     typeName checked, recency checked. Four gates on the undoable one.
  *   documented:<path> reversible, weakly checked (file exists, anchor warns).
  *   ignored:<text>    IRREVERSIBLE, and checked by NOTHING. Free text. No gate at all.
  *
- * So the disposition that cannot be undone was the only one nobody had to prove. This adds the
- * citation form — and `--reopen` below removes the irreversibility itself, because a gate that can
- * only refuse in advance is not enough for a door that used to be one-way.
+ * So the disposition that cannot be undone would be the only one nobody had to prove. This adds
+ * the citation form — and `--reopen` below removes the irreversibility itself, because a gate that
+ * can only refuse in advance is not enough for a door that would otherwise be one-way.
  *
  * THREE CITATION SHAPES, each verified the way that KIND of thing is verified:
  *   covered:<uuid>            → read the record back from the store, exactly as `stored:` does, but
@@ -405,16 +402,15 @@ function gitTopLevel() {
  * beneath it (not a project, even when a dotfiles repository above it makes it a git working
  * tree), a path citation is refused, and the refusal says to run from the project.
  *
- * HOISTED OUT OF `sectionExists`, because `docExists` needed exactly this and used `process.cwd()`
- * instead. That is not the same thing, and the difference was a blocker in both directions:
+ * USED BY `docExists`: bounding against `process.cwd()` instead breaks both directions:
  *
  *   · FALSE REFUSAL. From a subdirectory a few levels into the repo, a `documented:../../TOP-
- *     LEVEL.md` citation — plainly inside the same repo — was refused, with a diagnosis telling
- *     the agent it was pointing outside the repo. That citation worked before, and a confidently
- *     wrong diagnosis is the exact failure `sectionExists` was rewritten to avoid below.
+ *     LEVEL.md` citation — plainly inside the same repo — would be refused, with a diagnosis
+ *     telling the agent it was pointing outside the repo. A confidently wrong diagnosis is the
+ *     exact failure `sectionExists` is written to avoid below.
  *   · FALSE ACCEPTANCE. From a directory that happens to be the parent of SEVERAL sibling repo
- *     checkouts, a citation into one sibling's docs passed — the cross-checkout case the comment
- *     claimed to refuse.
+ *     checkouts, a citation into one sibling's docs would pass — the cross-checkout case the
+ *     bound exists to refuse.
  *
  * Neither step falls back to the working directory itself: a parent of several checkouts that is
  * neither carrying the landmark nor inside a git tree finds no root and every citation is refused.
@@ -491,37 +487,32 @@ function docExists(ref) {
   /**
    * CONTAIN IT TO THE WORKTREE — bounded against the DISCOVERED ROOT, not `cwd`.
    *
-   * The first cut of this bound used `path.relative(process.cwd(), p)` under this same heading, and
-   * the heading was false: `cwd` is wherever the agent happens to be. Both directions were
-   * reachable and both reproduce:
+   * `cwd` is wherever the agent happens to be, so bounding against it fails in both directions:
    *   · FALSE REFUSAL — from a subdirectory a few levels into the repo (e.g. `<repo>/some/nested/
-   *     dir`), `documented:../../TOP-LEVEL.md` is plainly inside the repo and was refused, with a
-   *     diagnosis telling the agent it pointed outside the repo entirely. That citation worked
-   *     before the bound existed, and a confidently wrong diagnosis is the exact failure
-   *     `sectionExists` was rewritten to avoid, twenty lines up.
+   *     dir`), `documented:../../TOP-LEVEL.md` is plainly inside the repo and would be refused,
+   *     with a diagnosis telling the agent it pointed outside the repo entirely. A confidently
+   *     wrong diagnosis is the exact failure `sectionExists` is written to avoid.
    *   · FALSE ACCEPTANCE — from the parent directory of SEVERAL sibling repo checkouts,
-   *     `documented:other-checkout/docs/...` passed: the cross-checkout case the comment claimed
+   *     `documented:other-checkout/docs/...` would pass: the cross-checkout case the bound exists
    *     to catch.
    *
-   * NO ROOT = REFUSE, rather than falling back to `cwd`. The second cut DID fall back, which
-   * re-admitted the very counterexample above — from the parent of several checkouts, a sibling
-   * path is "inside cwd". If we cannot find the repo we cannot check the claim, and this file's
-   * doctrine is that failing open on a verification gate means there is no gate.
+   * NO ROOT = REFUSE, rather than falling back to `cwd`. A fallback re-admits the counterexample
+   * above — from the parent of several checkouts, a sibling path is "inside cwd". If we cannot
+   * find the repo we cannot check the claim, and this file's doctrine is that failing open on a
+   * verification gate means there is no gate.
    *
-   * ROOT-RELATIVE FIRST, cwd-relative as a FALLBACK — and the third cut of this function is here
-   * because the second one bounded against the root while still RESOLVING against `cwd`, then
-   * printed a diagnosis instructing the agent to "cite a path relative to the repo root". Obeying
-   * that instruction from a nested subdirectory produced a doubled-up, nonexistent path. The
-   * pre-bound string was merely ambiguous; that one was definitely false whenever `cwd !== root`
-   * — a verifier whose own instructions do not verify.
+   * ROOT-RELATIVE FIRST, cwd-relative as a FALLBACK. Bounding against the root while still
+   * RESOLVING against `cwd` would print a diagnosis instructing the agent to "cite a path relative
+   * to the repo root"; obeying that instruction from a nested subdirectory would produce a
+   * doubled-up, nonexistent path — a verifier whose own instructions do not verify.
    *
    * So try BOTH bases and accept the one that resolves inside the tree. Root-relative is what the
-   * diagnostics ask for and what a `documented:` citation means from an outside reviewer's
-   * perspective; cwd-relative keeps `../TOP-LEVEL.md`-style citations working from a subdirectory,
-   * which they did before any of this. Both candidates are containment-checked — the fallback
-   * widens which SPELLINGS are understood, never which files are reachable.
+   * diagnostics ask for and what a `documented:` citation means from an outside reader's
+   * perspective; cwd-relative keeps `../TOP-LEVEL.md`-style citations working from a subdirectory.
+   * Both candidates are containment-checked — the fallback widens which SPELLINGS are understood,
+   * never which files are reachable.
    *
-   * WHAT IT DOES NOT DO, stated so the comment stops outrunning the code: the containment check on the
+   * WHAT IT DOES NOT DO: the containment check on the
    * two spellings of the CITED path above is lexical; the link and nested-repository checks that follow
    * the choice of file resolve it by real path. Still agent-supplied, locally executed, read-only and
    * existence-only: hygiene against the realistic error, not a containment guarantee.
@@ -559,24 +550,22 @@ function docExists(ref) {
   const p = bases.find((q) => inside(q) && isFile(q));
   if (!p) {
     // Distinguish "outside the tree" from "not there" — they call for different corrections, and
-    // conflating them is how the previous cut told an agent its correct citation was a sibling
-    // worktree. Only claim the wrong-worktree diagnosis when a candidate really does land outside.
+    // conflating them tells an agent its correct citation was a sibling worktree. Only claim the
+    // wrong-worktree diagnosis when a candidate really does land outside.
     /**
      * THE WRONG-WORKTREE DIAGNOSIS IS ONLY EARNED WHEN NO BASE LANDS INSIDE THE TREE.
      *
-     * With two bases, one can escape while the other is inside-and-merely-missing — and the escape
-     * used to win, so `documented:../docs/typo.md` from a nested subdirectory was told it was
-     * "probably pointing at a sibling repo" when the real problem was a typo under `<repo>/docs/`.
-     * That is the confidently-wrong diagnosis this function has now produced in three different
-     * forms; a refusal the reader believes and acts on is worse than a vague one.
+     * With two bases, one can escape while the other is inside-and-merely-missing. If the escape
+     * won, `documented:../docs/typo.md` from a nested subdirectory would be told it was "probably
+     * pointing at a sibling repo" when the real problem was a typo under `<repo>/docs/`. A refusal
+     * the reader believes and acts on is worse than a vague one.
      */
     /**
-     * PREFER AN ESCAPED BASE THAT ACTUALLY EXISTS. The first cut of this gate suppressed the
-     * wrong-worktree diagnosis whenever ANY base landed inside the tree — which fixed the reported
-     * typo case and broke the true positive it was protecting: from a nested subdirectory,
-     * `documented:../../sibling-repo/TOP-LEVEL.md` is a real sibling-checkout path, but the
-     * cwd-relative base is nominally inside, so the agent was told "does not exist" while the
-     * first path listed under "tried" was sitting on disk. Fixing the instance broke the class.
+     * PREFER AN ESCAPED BASE THAT ACTUALLY EXISTS. Suppressing the wrong-worktree diagnosis
+     * whenever ANY base landed inside the tree would fix the typo case and break the true positive:
+     * from a nested subdirectory, `documented:../../sibling-repo/TOP-LEVEL.md` is a real
+     * sibling-checkout path, but the cwd-relative base is nominally inside, so the agent would be
+     * told "does not exist" while the first path listed under "tried" was sitting on disk.
      *
      * The discriminator is EXISTENCE, not insideness: an escaped candidate that exists is a real
      * wrong-worktree citation and deserves the specific diagnosis; an escaped candidate that does
@@ -594,19 +583,14 @@ function docExists(ref) {
    *
    * A repo can plausibly have two files with the same base name at different depths (a root-level
    * doc and a same-named one in a subdirectory). From a nested subdirectory, `documented:TOP-
-   * LEVEL.md` now resolves root-first to the ROOT file, where before the two-base change it
-   * resolved to the nested one. Either is defensible; recording the bare string `TOP-LEVEL.md` is
-   * not, because the disposition is PERMANENT and a reader cannot tell which file was actually
-   * verified. `note` is carried into the queue append as a separate `resolved` field.
-   * The first cut of this comment said `note` ALREADY landed there — false: it reached stdout
-   * only, so the permanent-record argument this comment makes was an
-   * argument for a fix that had not been written. The fix is at the append; see it there.
+   * LEVEL.md` resolves root-first to the ROOT file. Either is defensible; recording the bare
+   * string `TOP-LEVEL.md` is not, because the disposition is PERMANENT and a reader cannot tell
+   * which file was actually verified. `note` is carried into the queue append as a separate
+   * `resolved` field (see the append).
    */
-  // No `|| '.'` fallback: the only input that produced an empty relative path was `documented:.`,
-  // i.e. the repo root itself, which the isFile() gate above now refuses. The fallback's stated
-  // rationale ("a blank citation in a permanent record") was also false — in that case `resolved`
-  // is null and nothing blank ever reached the record. Codifying a degenerate input to make it
-  // render is the wrong direction; refuse it instead.
+  // No `|| '.'` fallback: the only input that produces an empty relative path is `documented:.`,
+  // i.e. the repo root itself, which the isFile() gate above refuses. Codifying a degenerate input
+  // to make it render is the wrong direction; refuse it instead.
   /**
    * A GIT root is only the project when no other repository sits between the cited file and it. With
    * an enclosing repository (a dotfiles repository at the home directory, a checkout that holds
@@ -645,8 +629,8 @@ function docExists(ref) {
    *
    * TWO spellings here are deliberate, and each cost a run:
    *   - NOT ^-anchored. The real line is "**Area:** docs " + separator + " **Slug:** <slug>", so the
-   *     slug is mid-line; an anchored regex found ZERO of the 81 declarations and the fix silently
-   *     did nothing. A probe caught it — the count was the discriminator, not the pass/fail.
+   *     slug is mid-line; an anchored regex finds ZERO of the 81 declarations and silently does
+   *     nothing. The count is the discriminator, not the pass/fail.
    *   - ` IS a backtick, escaped on purpose. Spelled literally, the static scanners read it as a
    *     template delimiter (tests/lintlib.mjs does not parse regex literals), the file unbalances,
    *     and receipt-lint REFUSES it — which its self-check did, correctly, on this very edit.
@@ -671,10 +655,9 @@ function parseSpec(arg) {
 }
 
 function renderList(rq, sessionId) {
-  // Records UNREACHABLE reports the same shape "nothing to settle" would — identical to the file
-  // version's own "corrupt" refusal. Printing "No pending candidates" here would be a CONFIDENT
-  // FALSE STATEMENT to the one actor that can settle them; say "can't tell" instead.
-  // (this discipline; queue census 4 of 4 — now against the record store, not the file.)
+  // Records UNREACHABLE reports the same shape "nothing to settle" would — the same refusal as a
+  // "corrupt" queue. Printing "No pending candidates" here would be a CONFIDENT FALSE STATEMENT to
+  // the one actor that can settle them; say "can't tell" instead.
   if (rq.state === 'unreachable') {
     console.error(`RECORDS UNREACHABLE for ${sessionId} — cannot list candidates.`);
     console.error(`  This is NOT "no pending candidates". Addressing lives in the record store; `);
@@ -722,13 +705,12 @@ async function main() {
   if (!args.length || args[0] === '--list') return renderList(rq, sessionId);
 
   /**
-   * `--reopen <cN> [why]` — THE DOOR SWINGS BOTH WAYS NOW.
+   * `--reopen <cN> [why]` — THE DOOR SWINGS BOTH WAYS.
    *
    * Every gate in this file refuses a bad claim BEFORE it lands. That is necessary and it is not
-   * sufficient, because the failure that actually happened was a claim that PASSED every gate there
-   * was (there were none on `ignored`) and was wrong on the merits: a true candidate disposed as
-   * `PREMISE IS FALSE`, citing docs that were stale. No pre-flight check catches that — the error
-   * is only visible LATER, when someone reads the reason and knows better.
+   * sufficient, because a claim can PASS every gate and still be wrong on the merits: a true
+   * candidate disposed as `PREMISE IS FALSE`, citing docs that are stale. No pre-flight check
+   * catches that — the error is only visible LATER, when someone reads the reason and knows better.
    *
    * So the remedy is not another gate, it is reversibility. `reopen` appends an event that undoes a
    * dispose; the fold makes the candidate pending again and the ordinary nudge re-offers it. The
@@ -741,18 +723,19 @@ async function main() {
    */
   if (args[0] === '--reopen') {
     /**
-     * THE FIRST NON-`cN` ARG TERMINATES THE ID LIST. It used to FILTER — every `cN`-shaped token
-     * anywhere in the line was an id, and everything else was joined into `why`. So
+     * THE FIRST NON-`cN` ARG TERMINATES THE ID LIST. Filtering instead (every `cN`-shaped token
+     * anywhere in the line is an id, everything else is joined into `why`) would make
      *
      *     --reopen c7 duplicate of c3
      *
-     * reopened **c7 AND c3**. If c3 had been correctly disposed as `stored`, it came back to
-     * pending, the nudge re-offered it, and the agent stored a duplicate record — while the summary
-     * line said "2 reopened" and nothing flagged it. A prose `why` that mentions another candidate
-     * is the NORMAL way to explain a reopen, so the footgun sits directly on the common path.
+     * reopen **c7 AND c3**. If c3 had been correctly disposed as `stored`, it would come back to
+     * pending, the nudge would re-offer it, and the agent would store a duplicate record — while
+     * the summary line said "2 reopened" and nothing flagged it. A prose `why` that mentions
+     * another candidate is the NORMAL way to explain a reopen, so the footgun would sit directly on
+     * the common path.
      *
-     * Positional parsing removes it: ids first, then the reason, and a `cN` inside the reason is
-     * just words. (The test that existed used a `why` with no `cN` token, so it could not see this.)
+     * Positional parsing avoids it: ids first, then the reason, and a `cN` inside the reason is
+     * just words.
      */
     const rest = args.slice(1);
     let cut = rest.findIndex((a) => !/^c\d+$/.test(a));
@@ -775,9 +758,9 @@ async function main() {
       if (!cand) { console.error(NO(`${id}: no such candidate in this session's queue`)); process.exitCode = 1; continue; }
       if (rq.superseded.has(id)) {
         // NOT "not disposed" — a candidate can be BOTH settled (stored/documented/ignored) AND
-        // later superseded by a revise; the two sets are independent (an earlier version of this
-        // wording asserted "not disposed", which is simply false whenever both are true). The
-        // refusal itself is correct either way — reopening a superseded candidate is never right.
+        // later superseded by a revise; the two sets are independent, so "not disposed" would be
+        // false whenever both are true. The refusal itself is correct either way — reopening a
+        // superseded candidate is never right.
         console.error(NO(`${id}: was SUPERSEDED by a revise — a later run already corrected this claim, `
           + 'whether or not it was also settled first. Reopening it would re-offer the version that '
           + 'was found wrong; settle the revision instead.'));
@@ -802,7 +785,7 @@ async function main() {
         console.log(`  WARN ${id}: was disposed as '${prior}', not 'ignored'. Reopening it re-offers a candidate whose`);
         console.log(`       content is already ${prior === 'stored' ? 'IN THE STORE — settling it again is how you get a DUPLICATE record' : 'IN A DOC — settle it as documented again, not as a new write'}.`);
       }
-      // RECORD FIRST — this is now the write that determines success. A failure here means
+      // RECORD FIRST — this is the write that determines success. A failure here means
       // NOTHING happened (the candidate is still settled exactly as it was); the file backup
       // below only ever runs after this succeeds.
       const reopened = await reopenRecord(cand.id, why || '');
@@ -877,14 +860,13 @@ async function main() {
       specs.push({ ...s, note: v.note, externalId: cand.externalId, recordId: cand.id });
     } else {
       /**
-       * BARE `ignored:<reason>` — legal, unverified, and now LOUD about which of those it is.
+       * BARE `ignored:<reason>` — legal, unverified, and LOUD about which of those it is.
        *
        * It stays legal because "not durable" and "point-in-time" are real dispositions with nothing
        * to cite, and demanding a citation there teaches the agent to invent one. But the agent must
        * see, at the moment it settles, that this particular claim was taken on trust — and that the
-       * cited form exists. The case that motivated this was a bare `ignored:PREMISE IS FALSE` whose
-       * premise was true; a line saying "nothing checked this" is the cheapest thing that could
-       * have interrupted it.
+       * cited form exists. A bare `ignored:PREMISE IS FALSE` whose premise was in fact true is the
+       * case to interrupt; a line saying "nothing checked this" is the cheapest thing that can.
        */
       if (!s.ref) skips.push(`  NOTE ${s.id}: ignored with no reason — a reason is how the next session knows this was judged, not missed`);
       else skips.push(`  NOTE ${s.id}: ignored — reason recorded but NOT verified. If this is "already covered", `
@@ -903,24 +885,24 @@ async function main() {
     return;
   }
 
-  // ── Phase 2: settle. The RECORD write is now the operation that determines success — records is
+  // ── Phase 2: settle. The RECORD write is the operation that determines success — records is
   // the address space and the source of truth; the file is a backup.
   let n = 0;
   for (const s of specs) {
     /**
      * BOTH THE CLAIM AND WHAT IT RESOLVED TO. `ref` is what the agent typed; `resolved` is the file
-     * or record the gate actually verified. Keeping only `ref` was the defect:
-     * the root-relative normalisation reached the terminal line and nothing else, so a `documented:
-     * ../../TOP-LEVEL.md` citation from a nested subdirectory left a permanent record that still
+     * or record the gate actually verified. Keeping only `ref` would let the root-relative
+     * normalisation reach the terminal line and nothing else, so a `documented:
+     * ../../TOP-LEVEL.md` citation from a nested subdirectory would leave a permanent record that
      * could not say which of two same-named files was checked.
      *
      * RECORD FIRST, by the real id `readRecords` already resolved — no externalId round-trip
      * needed here (that lookup shape stays in candidates.mjs for callers that only hold an
      * externalId; this one holds the id directly). A failure here means NOTHING happened for this
      * spec: still pending, exactly as before. `return`, not `continue` — matching this file's own
-     * documented scope for Phase 2 failures (VALIDATION was already all-or-nothing in Phase 1;
-     * a write failure here is the one place partial application was always possible and always
-     * disclosed, never silently).
+     * documented scope for Phase 2 failures (VALIDATION is all-or-nothing in Phase 1; a write
+     * failure here is the one place partial application is possible, and it is always disclosed,
+     * never silent).
      */
     const settled = await settleRecord(s.recordId, s.disposition,
       { ref: s.ref || null, resolved: s.note && s.note !== s.ref ? s.note : null });

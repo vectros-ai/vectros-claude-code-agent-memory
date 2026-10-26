@@ -1,16 +1,16 @@
 /**
  * The DUAL-WRITE mapping — one distiller capture into a queue event and a record.
  *
- * What this is really guarding: during cutover Phase A both stores receive every proposal, and the
- * whole phase is judged on whether they AGREE. This function is where a disagreement would be
- * born, and most of its ways of being wrong are silent — a dropped field reads as a candidate the
- * distiller never filled in, a mistranslated `revises` reads as a correction that corrected
- * nothing, and a `proposedAt` taken from the wrong clock reads as a review queue in the wrong
- * order. None of those raise anything anywhere.
+ * What this is really guarding: both stores receive every proposal, and `report.mjs --compare`
+ * judges whether they AGREE. This function is where a disagreement would be born, and most of
+ * its ways of being wrong are silent — a dropped field reads as a candidate the distiller never
+ * filled in, a mistranslated `revises` reads as a correction that corrected nothing, and a
+ * `proposedAt` taken from the wrong clock reads as a review queue in the wrong order. None of
+ * those raise anything anywhere.
  *
  * It is a separate module precisely so this file can exist: the worker's distiller cannot be faked
- * on Windows (see `drain-test.mjs`'s header for the false green that cost), so the mapping was
- * previously unreachable by any test.
+ * on Windows (see `drain-test.mjs`'s header), so a mapping inlined in the worker would be
+ * unreachable by any test.
  */
 import { check, eq, done } from './assert.mjs';
 import './isolate.mjs';   // MUST precede any runtime-state path use — see the file header.
@@ -30,7 +30,7 @@ console.log('\n=== 1. one key, both stores ===');
   eq('the externalId is session-qualified', externalId, `${SID}:u-1`);
   eq('...and is on the queue event', ev.externalId, externalId);
   // The KEY is what makes the two stores comparable at all. If the record were keyed by anything
-  // the queue does not also hold, the Phase A agreement check degrades to matching on title —
+  // the queue does not also hold, the agreement check degrades to matching on title —
   // which two near-duplicate proposals from the same session defeat by construction.
   check('nothing allocates it from a count (no read-modify-write to race)',
     !JSON.stringify({ ev, candidate }).includes('"c1"'));
@@ -39,11 +39,10 @@ console.log('\n=== 1. one key, both stores ===');
 console.log('\n=== 2. every field the distiller emits reaches the RECORD ===');
 {
   /**
-   * THE LOSSY-COPY BUG, pinned. The candidate schema originally modelled neither `dest` nor
-   * `sourceRef`, and both are RENDERED today — `dest` in the nudge line every prompt carries,
-   * `sourceRef` in `dispose --list`. Dual-write would have written records that looked complete
-   * and were not, and the loss would have surfaced at Phase B as a review surface that quietly
-   * stopped showing a verifier where to start.
+   * THE LOSSY-COPY BUG, pinned. `dest` and `sourceRef` are both RENDERED — `dest` in the nudge
+   * line every prompt carries, `sourceRef` in `dispose --list`. A record schema that dropped them
+   * would hold records that looked complete and were not, and the loss would surface as a review
+   * surface that quietly stopped showing a verifier where to start.
    */
   const { candidate } = mapCapture(full, base);
   for (const [k, v] of Object.entries({
@@ -81,13 +80,13 @@ console.log('\n=== 4. `revises` is TRANSLATED between the two id spaces ===');
 console.log('\n=== 5. a target that predates dual-write has no id to cite ===');
 {
   /**
-   * Every candidate proposed before this change has no `externalId`, so a correction to one cannot
-   * point at a row that was never written. OMITTING the key is the honest answer; the alternatives
-   * are worse in both directions — a `null` would overwrite a good value on an upsert retry, and
-   * carrying the ordinal (`"c1"`) would write a dangling reference that LOOKS resolvable and
-   * resolves to nothing.
+   * Every legacy candidate (written before externalIds were minted) has no `externalId`, so a
+   * correction to one cannot point at a row that was never written. OMITTING the key is the
+   * honest answer; the alternatives are worse in both directions — a `null` would overwrite a good
+   * value on an upsert retry, and carrying the ordinal (`"c1"`) would write a dangling reference
+   * that LOOKS resolvable and resolves to nothing.
    */
-  const all = new Map([['c1', { title: 'proposed before the cutover' }]]);
+  const all = new Map([['c1', { title: 'proposed before the spool existed' }]]);
   const { isRevise, ev, candidate } = mapCapture({ ...full, op: 'REVISE', revises: 'c1' }, { ...base, all });
   check('the queue side still records the correction', isRevise && ev.revises === 'c1');
   check('the record side omits `revises` entirely', !('revises' in candidate));
@@ -142,6 +141,44 @@ console.log('\n=== 8. the window offset rides the event ===');
   eq('the queue event records the offset this window reached', ev.offset, 123456);
   check('the record does NOT — it is queue bookkeeping, not a fact about the claim',
     !('offset' in mapCapture(full, { ...base, offset: 123456 }).candidate));
+}
+
+console.log('\n=== 9. kind and dest are closed sets: nothing free-form is carried through them ===');
+{
+  // The record type refuses any other value, so an off-contract one used to be sent, refused and retried forever.
+  for (const kind of ['user', 'feedback', 'project', 'reference', 'observation']) {
+    const { ev, candidate } = mapCapture({ ...full, kind }, base);
+    check(`kind "${kind}" passes through to both stores`, ev.kind === kind && candidate.kind === kind);
+  }
+  for (const dest of ['memory', 'doc']) {
+    const { ev, candidate } = mapCapture({ ...full, dest }, base);
+    check(`dest "${dest}" passes through to both stores`, ev.dest === dest && candidate.dest === dest);
+  }
+
+  const sentence = 'Jane Roe of Initech Corp was double-billed $4,000 on invoice 8812, escalate to billing';
+  const offContract = [sentence, 'Feedback', 'feedback ', '', 'memory', 'doc', 42, true, ['project'], { kind: 'project' }];
+  for (const kind of offContract) {
+    const { ev, candidate } = mapCapture({ ...full, kind }, base);
+    const label = typeof kind === 'string' ? JSON.stringify(kind.slice(0, 28)) : JSON.stringify(kind);
+    check(`an off-contract kind ${label} is dropped from the queue event and the record alike`,
+      ev.kind === undefined && candidate.kind === undefined
+        && !('kind' in JSON.parse(JSON.stringify(ev))) && !('kind' in JSON.parse(JSON.stringify(candidate))));
+  }
+  for (const dest of [sentence, 'Memory', 'docs', 'kind', 7, ['doc'], { dest: 'doc' }]) {
+    const { ev, candidate } = mapCapture({ ...full, dest }, base);
+    const label = typeof dest === 'string' ? JSON.stringify(dest.slice(0, 28)) : JSON.stringify(dest);
+    check(`an off-contract dest ${label} becomes "no suggestion" (null) in both stores`, ev.dest === null && candidate.dest === null);
+  }
+
+  // The point of the exercise: free text placed in either field appears nowhere in either write.
+  const probe = mapCapture({ ...full, kind: sentence, dest: sentence }, base);
+  check('free text in kind and dest reaches neither the queue event nor the record',
+    !JSON.stringify(probe.ev).includes('Initech') && !JSON.stringify(probe.candidate).includes('Initech'));
+  check('the queue event and the record agree on both fields for every input above',
+    [sentence, 'feedback', 'doc', 7, undefined].every((v) => {
+      const m = mapCapture({ ...full, kind: v, dest: v }, base);
+      return m.ev.kind === m.candidate.kind && m.ev.dest === m.candidate.dest;
+    }));
 }
 
 done();

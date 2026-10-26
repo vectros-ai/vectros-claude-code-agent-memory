@@ -1,15 +1,12 @@
 /**
  * ONE distiller capture -> the two writes it becomes. Pure; no I/O, no clock, no randomness.
  *
- * WHY THIS IS ITS OWN FILE. During a dual-write cutover the same proposal is written to two stores
- * (queue file + spool -> `candidate` record), and the cutover's success criterion is that those two
- * AGREE. A mapping that decides what each store gets is therefore the exact place a divergence
- * would be born — and inlined in `capture-worker.mjs` it was unreachable by any test: the worker
- * is a script whose distiller cannot be faked on Windows (spawning a `.cmd`-shimmed binary there
- * silently changes the effective cwd out from under the fake, defeating the stub — see
- * `drain-test.mjs`'s header for the false green that cost). It also has a SECOND consumer coming —
- * a historical-queue backfill has to produce byte-identical records from old queue files, and two
- * hand-written copies of this shape is exactly how a backfill silently disagrees with the live path.
+ * WHY THIS IS ITS OWN FILE. The same proposal is written to two stores (queue file + spool ->
+ * `candidate` record), and `report.mjs --compare` checks that those two AGREE. A mapping that
+ * decides what each store gets is therefore the exact place a divergence would be born — and
+ * inlined in `capture-worker.mjs` it would be unreachable by any test: the worker is a script whose
+ * distiller cannot be faked on Windows (spawning a `.cmd`-shimmed binary there silently changes the
+ * effective cwd out from under the fake, defeating the stub — see `drain-test.mjs`'s header).
  *
  * EVERYTHING VARIABLE IS AN ARGUMENT. `uuid` and `proposedAt` are injected rather than read from
  * `crypto`/`Date` here, so a test pins the output exactly instead of asserting around the parts
@@ -18,6 +15,8 @@
  * copies of a format string is one edit away from a corpus keyed two different ways.)
  */
 import { mintExternalId } from './candidates.mjs';
+// `kind` and `dest` are closed sets: the queue event and the record are normalised here, once, so they agree.
+import { kindOf, destOf } from './candidate-fields.mjs';
 
 /**
  * @param c          one entry from the distiller's `captures` array
@@ -45,10 +44,9 @@ export function mapCapture(c, { sessionId, all, offset, uuid, proposedAt, origin
    * nothing outside that one file. The record corpus keys on `externalId`, which is global. So the
    * queue event keeps the ordinal and the record gets the target's externalId, resolved here.
    *
-   * NULL IS A REAL ANSWER, not a failure: a candidate proposed BEFORE dual-write shipped has no
-   * externalId, so a correction to it cannot cite a row that was never written. The correction is
-   * still proposed — it just lands without the pointer, which is honest. A historical-queue
-   * backfill is what gives those targets an id.
+   * NULL IS A REAL ANSWER, not a failure: a queue entry written before externalIds were minted has
+   * no externalId, so a correction to it cannot cite a row that was never written. The correction
+   * is still proposed — it just lands without the pointer, which is honest.
    */
   const revisesXid = isRevise ? (all.get(c.revises)?.externalId ?? null) : null;
 
@@ -56,9 +54,9 @@ export function mapCapture(c, { sessionId, all, offset, uuid, proposedAt, origin
     op: isRevise ? 'revise' : 'propose',
     ...(isRevise ? { revises: c.revises } : {}),
     externalId,
-    title: c.title, body: c.body, kind: c.kind, area: c.area ?? null,
+    title: c.title, body: c.body, kind: kindOf(c.kind), area: c.area ?? null,
     tags: c.tags || [], sourceRef: c.sourceRef ?? null,
-    dest: c.dest || null, // the distiller's SUGGESTION; the agent decides (it cannot write either tier)
+    dest: destOf(c.dest), // the distiller's SUGGESTION; the agent decides (it cannot write either tier)
     offset,
   };
 
@@ -73,15 +71,13 @@ export function mapCapture(c, { sessionId, all, offset, uuid, proposedAt, origin
    * day, in the order it happened to drain.
    */
   const candidate = {
-    title: c.title, body: c.body, kind: c.kind,
+    title: c.title, body: c.body, kind: kindOf(c.kind),
     area: c.area ?? null, tags: c.tags || [], sourceRef: c.sourceRef ?? null,
-    dest: c.dest || null,
+    dest: destOf(c.dest),
     proposedAt,
     /**
-     * WHICH PATH PROPOSED THIS. The schema has carried `origin: session|recovered` since it was
-     * written and NOTHING ever set the second value, so the distinction it exists for — a live
-     * session's own proposal versus one recovered from a session that ended without settling —
-     * was absent from every record the corpus would have held.
+     * WHICH PATH PROPOSED THIS: `origin: session|recovered` — a live session's own proposal versus
+     * one recovered from a session that ended without settling.
      */
     origin,
     ...(revisesXid ? { revises: revisesXid } : {}),
@@ -96,8 +92,7 @@ export function mapCapture(c, { sessionId, all, offset, uuid, proposedAt, origin
  * Comparing externalId sets proves a row exists; it cannot see a row that exists and is EMPTY. That
  * is not a hypothetical: `POST /v1/records` ignores unknown top-level keys, so sending `data`
  * instead of `payload` returns 200 and stores nothing, and the externalId — a top-level field —
- * lands regardless. Two staging runs were lost to exactly that, and a presence-only check would
- * have called both of them agreement.
+ * lands regardless. A presence-only check would call that agreement.
  *
  * Only the fields that carry the claim: a reviewer's verdict (`disposition`, `ref`, `resolved`)
  * legitimately changes after the write, so including it would report every settled candidate as

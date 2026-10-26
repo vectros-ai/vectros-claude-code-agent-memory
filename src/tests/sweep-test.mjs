@@ -142,11 +142,10 @@ console.log('\n=== sweepDue: the debounce, both directions ===');
    * not-yet-swept stale transcript (MEASURED ~1.7s against a 10-session backlog) — but because the
    * two failures are not symmetric: an extra scan costs seconds, a missed sweep costs the text.
    *
-   * Driven through the injected reader, NOT by trying to produce a real unreadable file. The first
-   * draft pointed this at a DIRECTORY and failed — `statSync` on a directory SUCCEEDS and hands
-   * back a usable mtime, so the check was resting on a premise that does not hold. That is the
-   * `lock.mjs` trap exactly (a harness that can only confirm what it assumes), so the branch is
-   * driven directly and the test claims only what it actually exercises: the LOGIC.
+   * Driven through the injected reader, NOT by trying to produce a real unreadable file. Pointing
+   * this at a DIRECTORY fails — `statSync` on a directory SUCCEEDS and hands back a usable mtime.
+   * That is the `lock.mjs` trap exactly (a harness that can only confirm what it assumes), so the
+   * branch is driven directly and the test claims only what it actually exercises: the LOGIC.
    */
   const thrower = (code) => () => { const e = new Error('injected'); e.code = code; throw e; };
   check('a stat that fails LOUDLY still sweeps', sweepDue(marker, realNow, 600_000, thrower('EPERM')).due);
@@ -297,9 +296,9 @@ console.log('\n=== planClaimRenewals: who gets stamped this turn (the two shippe
   const plan = (o) => planClaimRenewals({ nowMs: NOWM, renewEveryMs: R, ...o });
   const sids = (p) => p.map((x) => x.sid).sort().join(',');
 
-  // Case 1a: a holder with candidates of its own still renews. The old code stopped scanning the
-  // moment `ownPending > 0`, and a session working a foreign queue is exactly one producing
-  // candidates — so the queue it was mid-verification on reopened at the TTL.
+  // Case 1a: a holder with candidates of its own still renews. Stopping the scan the moment
+  // `ownPending > 0` would fail, since a session working a foreign queue is exactly one producing
+  // candidates — the queue it is mid-verification on would reopen at the TTL.
   eq('a held queue is renewed even with no pick (own work in progress)',
     sids(plan({ orphans: [q('X', 'me', T)], pick: null, delivered: false, sessionId: 'me' })), 'X');
 
@@ -335,9 +334,9 @@ console.log('\n=== planClaimRenewals: who gets stamped this turn (the two shippe
 
 console.log('\n=== orphanedPending: an UNREADABLE queue must not render as "nothing pending" ===');
 {
-  // This branch is the module's founding concern and was unreached by every prior fixture — the
-  // injected readQueue never returned `corrupt`, so the one path that keeps "cannot tell" from
-  // looking like "nothing to settle" was never exercised.
+  // This branch is the module's founding concern — it needs a fixture whose injected readQueue
+  // returns `corrupt`, or the one path that keeps "cannot tell" from looking like "nothing to
+  // settle" is never exercised.
   const got = orphanedPending(NOW, {
     staleMs: DAY,
     listQueues: () => ['eeeeeeee-3333-0000-0000-000000000002'],
@@ -385,10 +384,9 @@ console.log('\n=== the orphan nudge block: capped, and honest about the cap ==='
    * THE BLOCK'S JOB IS TO MOVE A READER WHO HAS SOMETHING ELSE TO DO, so the wording is the
    * mechanism and gets asserted like one.
    *
-   * This check previously read `/NOT YOUR SESSION|no memory of/i` — an alternation that ACCEPTED
-   * the phrase the block opened with, "THIS IS NOT YOUR SESSION'S WORK". That sentence granted
-   * permission to defer, in the first clause, and the test would have preserved it through any
-   * rewrite. OBSERVED over real sweeps (a qualitative report, not an instrumented
+   * A check of `/NOT YOUR SESSION|no memory of/i` would be wrong: the alternation ACCEPTS the
+   * phrase "THIS IS NOT YOUR SESSION'S WORK". That sentence grants permission to defer, in the
+   * first clause, and the test would preserve it through any rewrite. OBSERVED over real sweeps (a qualitative report, not an instrumented
    * measurement — the measured figures elsewhere in this tree cite their conditions): every settlement
    * happened only when that case was argued explicitly; left alone, agents deferred. A test that pins the
    * words is worth little, but a test that pins the LICENCE is worth exactly what it costs.
@@ -402,8 +400,8 @@ console.log('\n=== the orphan nudge block: capped, and honest about the cap ==='
   check('it keeps leaving-it-pending an explicitly CORRECT outcome',
     /DISCRETIONARY/.test(text) && /LEAVE IT PENDING/.test(text), text.slice(-400));
   /**
-   * THE BLOCK MUST NOT PROMISE A RETURN IT CANNOT DELIVER — this comment used to, and it
-   * was FALSE IN BOTH DIRECTIONS. `orphanSig` keys on the pending SET (nudge.mjs), recall commits it
+   * THE BLOCK MUST NOT PROMISE A RETURN IT CANNOT DELIVER — such a promise is FALSE IN BOTH
+   * DIRECTIONS. `orphanSig` keys on the pending SET (nudge.mjs), recall commits it
    * on delivery and re-renders only when the signature CHANGES, so a reader who settles nothing
    * never sees the queue again this session; meanwhile `planClaimRenewals` keeps the claim fresh, so
    * `orphanedPending`'s gate hides it from every other session too. "It will be offered again" was
@@ -477,8 +475,8 @@ console.log('\n=== runSweep — THE FUNCTION THAT SPENDS MONEY (was untested; 3 
      *
      * The biggest-residual session sorts FIRST and its lock is held (a live worker, or a stale lock
      * nothing ever cleared, since a done session's capture hook never runs again). The cap must
-     * bound SPAWNS, not attempts: the next eligible session must still be flushed. Before the fix
-     * this returned flushed:0 on every sweep, forever, while blaming MAX_FLUSH_PER_SWEEP.
+     * bound SPAWNS, not attempts: the next eligible session must still be flushed. Bounding
+     * attempts returns flushed:0 on every sweep, forever, while blaming MAX_FLUSH_PER_SWEEP.
      */
     const wedged = five[4].sid;
     const { calls, deps } = mkDeps({
@@ -498,8 +496,7 @@ console.log('\n=== runSweep — THE FUNCTION THAT SPENDS MONEY (was untested; 3 
      * blocked sessions are skipped rather than counted against the cap, the two disagree: with
      * [a(blocked), b] and max=1 the loop flushes `b`, while the precomputed slice also called `b`
      * deferred. The receipt then named the same session as both, and runSweep returned deferred:1
-     * for a session it had just drained — the mis-attribution its own comment forbids, introduced
-     * by the fix that added the skipping.
+     * for a session it had just drained — the mis-attribution its own comment forbids.
      */
     const wedged = five[4].sid;
     const { calls, deps } = mkDeps({
@@ -524,7 +521,7 @@ console.log('\n=== runSweep — THE FUNCTION THAT SPENDS MONEY (was untested; 3 
     eq('and it is reported as blocked', r.blocked, 1);
   }
   {
-    // A spawn that throws must RELEASE the lock we took, or capture is wedged for 30 minutes — and
+    // A spawn that throws must RELEASE the lock we took, or capture is wedged for the whole stale-lock window — and
     // must not mark swept, because nothing ran.
     const { calls, deps } = mkDeps({
       residualBySession: () => [five[4]],
@@ -537,14 +534,13 @@ console.log('\n=== runSweep — THE FUNCTION THAT SPENDS MONEY (was untested; 3 
   }
   {
     // A lost `swept` append is the unbounded-retry hazard. The spawn already happened, so there is
-    // nothing to undo — but it must not pass silently. (`append` returns false; the old code
-    // discarded it, in the same module whose header says that return "is now CHECKED".)
+    // nothing to undo — but it must not pass silently. (`append` returns false; discarding that
+    // return is the defect, in a module whose header says it is CHECKED.)
     //
-    // BASELINE THE LOG FIRST. This originally grepped the tail of the real hooks.log with no
-    // baseline, so a matching line left by ANY earlier run of this suite satisfied it — the check
-    // was byte-identical under the bug it claims to catch, which is the precise defect the
-    // undeclared-const lint documents at length about its own red-proof. Assert only against bytes
-    // appended by THIS call.
+    // BASELINE THE LOG FIRST. Grepping the tail of the real hooks.log with no baseline would let a
+    // matching line left by ANY earlier run of this suite satisfy the check — byte-identical under
+    // the bug it claims to catch, the defect the undeclared-const lint documents at length about
+    // its own red-proof. Assert only against bytes appended by THIS call.
     const LOGP = logPath(); // the redirected, per-file-isolated log, not production
     const at = (() => { try { return fs.statSync(LOGP).size; } catch { return 0; } })();
     const { deps } = mkDeps({ residualBySession: () => [five[4]], markSwept: () => false }); // this block asserts the log receipt only; call counts aren't the point here
@@ -568,9 +564,9 @@ console.log('\n=== the steady-state "no flush" receipt must name the RIGHT cause
 {
   /**
    * Once the backlog drains, `skipSwept` drops every stale session BEFORE `selectFlushable` can
-   * classify it, so the gate tally is empty — and the fallback used to assert "no session has been
-   * idle long enough", which is false for every one of them. This shipped untested, and the entire
-   * point of the fix is a STRING an operator reads at 2am, so the string is what gets asserted.
+   * classify it, so the gate tally is empty — and a fallback asserting "no session has been idle
+   * long enough" would be false for every one of them. The entire point is a STRING an operator
+   * reads at 2am, so the string is what gets asserted.
    */
   const LOGP = logPath(); // the redirected, per-file-isolated log, not production
   const at = (() => { try { return fs.statSync(LOGP).size; } catch { return 0; } })();
@@ -595,11 +591,10 @@ console.log('\n=== the steady-state "no flush" receipt must name the RIGHT cause
 console.log('\n=== the blind-spot receipt fires on BOTH paths (it was dead code in the suite) ===');
 {
   /**
-   * WHY THIS EXISTS: `unseen` shipped with no coverage, and worse, it was UNREACHABLE from the
-   * suite — every `runSweep` test injects `residualBySession`, while `blindSpots` is populated only
-   * by the REAL enumerator's `noteSkip`. Both `if (unseen)` lines were therefore dead in every test,
-   * and deleting them would have left the suite green. That is verbatim the failure this branch's
-   * own `all-seams-injected-hides-wiring` gotcha describes — in the commit that edits that gotcha.
+   * WHY THIS EXISTS: `unseen` is UNREACHABLE from a suite where every `runSweep` test injects
+   * `residualBySession`, while `blindSpots` is populated only by the REAL enumerator's `noteSkip`.
+   * Both `if (unseen)` lines would be dead in every test, and deleting them would leave the suite
+   * green — the all-seams-injected-hides-wiring failure.
    *
    * The seam used here is the LEDGER, not the enumerator: push a real entry through `noteSkip`,
    * drive each receipt path, and read the bytes the sweep actually wrote.
@@ -642,9 +637,9 @@ console.log('\n=== the blind-spot receipt fires on BOTH paths (it was dead code 
 
   /**
    * THE `|| unseen` TERM OF THE GUARD, isolated. The two-row fixture above enters that branch
-   * anyway (one row is deferred by the cap), so deleting `|| unseen` left it green — the term was
-   * untested inside a test that looked like it covered it. ONE row: nothing deferred, nothing
-   * blocked, so the receipt exists only because a blind spot does.
+   * anyway (one row is deferred by the cap), so deleting `|| unseen` would leave it green — the
+   * term would be untested inside a test that looked like it covered it. ONE row: nothing
+   * deferred, nothing blocked, so the receipt exists only because a blind spot does.
    */
   {
     blindSpots.length = 0;
@@ -682,11 +677,11 @@ console.log('\n=== the blind-spot receipt fires on BOTH paths (it was dead code 
 console.log('\n=== runSweep END-TO-END: the REAL modules, only `spawn` stubbed ===');
 {
   /**
-   * THIS IS THE TEST WHOSE ABSENCE SHIPPED A BLOCKER. Every check above injects `isHeld`, `claim`,
-   * `release`, `markSwept` AND the enumerator, so `d.isHeld || isHeld` short-circuited and the fact
-   * that `isHeld` was never IMPORTED was invisible: `runSweep` threw ReferenceError on every real
-   * Stop, the sweep was dead in production, and 75 green checks said nothing about it. The seam
-   * added to make the spending path testable was what hid the defect in it.
+   * THIS TEST EXISTS BECAUSE EVERY CHECK ABOVE INJECTS `isHeld`, `claim`, `release`, `markSwept`
+   * AND the enumerator, so `d.isHeld || isHeld` short-circuits and an `isHeld` that was never
+   * IMPORTED would be invisible: `runSweep` would throw ReferenceError on every real Stop, the
+   * sweep would be dead in production, and every green check above would say nothing about it. The
+   * seam added to make the spending path testable is what hides a defect in it.
    *
    * `node --check` does not catch this either (it blesses a free identifier), and the
    * undeclared-const lint only censuses UPPER_SNAKE names. The remedy is a test that runs the real
@@ -699,9 +694,8 @@ console.log('\n=== runSweep END-TO-END: the REAL modules, only `spawn` stubbed =
   const tx = path.join(base, 'transcript.jsonl');
   /**
    * A transcript the REAL parser accepts — `type` (not `role`) at the top level, which is what
-   * `transcript.mjs:78` filters on. The first draft of this fixture used `role`, so
-   * `transcriptLength` returned 0, the residual fell under the floor, and nothing flushed. The test
-   * reported that honestly instead of passing — which is the argument for building a fixture
+   * `transcript.mjs` filters on. A fixture using `role` makes `transcriptLength` return 0, the
+   * residual fall under the floor, and nothing flush — the argument for building a fixture
    * against the real reader rather than against one's memory of the format.
    */
   fs.writeFileSync(tx, Array.from({ length: 200 }, (_, i) =>

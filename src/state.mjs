@@ -1,13 +1,13 @@
 /**
  * Per-session hook state — ONE read/write path for all six hooks.
  *
- * Before this, seven hand-rolled `writeFileSync(sp, JSON.stringify(state))` calls raced across
- * six processes, and four hand-rolled readers each did `catch {}` -> silent reset. See
- * `atomic.mjs` for the measurements (33.7% torn reads; the Windows EPERM trap).
+ * Hand-rolled `writeFileSync(sp, JSON.stringify(state))` calls race across six processes, and
+ * hand-rolled readers that `catch {}` -> silent reset lose data. See `atomic.mjs` for the
+ * measurements (33.7% torn reads; the Windows EPERM trap).
  *
- * The observability rule is `hooklog.mjs`'s own, applied to the thing that broke it:
- * **a fail-open component MUST say what it did.** A corrupt read and a lost write are data loss.
- * They stay non-fatal — a hook must never break a turn — but they are no longer silent.
+ * The observability rule is `hooklog.mjs`'s own: **a fail-open component MUST say what it did.** A
+ * corrupt read and a lost write are data loss. They stay non-fatal — a hook must never break a
+ * turn — but they are never silent.
  */
 import fs from 'node:fs';
 import { readJsonSafe, writeFileAtomic } from './atomic.mjs';
@@ -19,17 +19,16 @@ export const statePath = stateFor;
 /**
  * Read this session's state. `defaults` are applied for a FRESH session (no file) — which is
  * correct — and also on corruption, which is NOT correct but is all we can do; the difference
- * is that corruption now announces itself instead of masquerading as a new session.
+ * is that corruption announces itself instead of masquerading as a new session.
  */
 /**
  * @returns {{value: object, state: 'fresh'|'ok'|'unreadable'|'damaged', why?: string}}
  *
  * IT RETURNS THE RECEIPT, and that is the whole point of `readJsonSafe` — which un-conflates
- * fresh/ok/corrupt and was then thrown away one line later by `return r.value`. The receipt died at
- * the return: **no caller could check it, because it was not in the return type.** So the file that
- * SIX processes race was the only one whose reader could not fail closed — while the identical
- * receipt from `queue.read()` is honoured at five sites and refuses to act at `capture.mjs`. Same
- * rule, a receipt only where someone happened to wire one — the same census discipline failure mode.
+ * fresh/ok/unreadable/damaged. Returning only `r.value` would throw the receipt away: **no caller
+ * could check it, because it would not be in the return type**, and the file that SIX processes
+ * race would be the one whose reader could not fail closed — while the identical receipt from
+ * `queue.read()` is honoured by its callers (`capture.mjs` refuses to act on it).
  *
  * WHY A CORRUPT READ MUST NOT BE WRITTEN BACK, which is the part worth understanding: `corrupt`
  * here overwhelmingly means a TORN read, not a broken file. `writeFileSync` truncates then writes,
@@ -38,8 +37,8 @@ export const statePath = stateFor;
  * defaults and writing them back converts a transient, self-healing read failure into PERMANENT
  * data loss — which is exactly how `promptCount` went 37 -> 9 and nobody noticed for a month.
  *
- * TWO FAILURES, OPPOSITE ANSWERS — and this is the correction to the first version of this fix,
- * which refused to write on BOTH and thereby traded a transient wipe for a permanent wedge:
+ * TWO FAILURES, OPPOSITE ANSWERS — refusing to write on BOTH would trade a transient wipe for a
+ * permanent wedge:
  *
  *   'unreadable' — the read failed; the bytes are UNKNOWN and may be perfect. Publishing defaults
  *                  would destroy content nobody looked at. DO NOT WRITE; the next hook re-reads.

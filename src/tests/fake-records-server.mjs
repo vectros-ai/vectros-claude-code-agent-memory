@@ -101,8 +101,8 @@ export function startFakeRecordsServer() {
       const { type, field, value, values, from, to, limit, startFrom } = body;
       // The real API rejects EVERY unknown key with a 400 (candidates.mjs's own "contract 3"); this
       // fake does not implement that generally — it stays lenient on fields it doesn't otherwise
-      // understand. It DOES reject this one specific wrong key, deliberately: `cursor` is exactly
-      // the field name a prior version of candidates.mjs sent instead of `startFrom`, and letting it
+      // understand. It DOES reject this one specific wrong key, deliberately: `cursor` is the
+      // guessable field name for `startFrom`, and letting it
       // through silently (destructured into nothing, `startFrom` reading `undefined`) would swap a
       // fast, legible regression signal for a slow one — the caller would instead loop the full page
       // bound re-fetching page 1 and only fail once exhausted (`dispose.mjs` reporting RECORDS

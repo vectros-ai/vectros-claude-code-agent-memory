@@ -215,8 +215,8 @@ async function runLiveRoundTrip() {
     eq('the disposition on the RECORD itself flipped to ignored — not just the local file', foundAfter.disposition, 'ignored');
   }
 
-  // NOT unconditional — a prior version of this line printed regardless of outcome, which read as
-  // a false all-clear on exactly the runs where settling had actually failed.
+  // NOT unconditional — printing regardless of outcome would read as a false all-clear on exactly
+  // the runs where settling had actually failed.
   console.log(settledOnRecord
     ? `\n(live tenant: alias='${ALIAS}', session='${SID}' — this run's own record is now settled and harmless to leave)`
     : `\n(live tenant: alias='${ALIAS}', session='${SID}' — settling did NOT confirm above; this probe may still be pending in the test tenant)`);

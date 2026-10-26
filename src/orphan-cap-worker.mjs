@@ -12,18 +12,17 @@
  * spans a process spawn, and another session may have settled the candidate in between. Same
  * reasoning as `reap.mjs`'s re-check immediately before unlinking.
  *
- * ⚠ THAT RE-CHECK USED TO STOP AT THE PLAN, AND THAT WAS A REAL BUG:
+ * ⚠ THE RE-CHECK MUST NOT STOP AT THE PLAN:
  * `planOrphanCap`'s "pending" list is derived from the LOCAL FILE, which can lag the RECORD —
  * `dispose.mjs`'s own file backup is documented best-effort and can fail, and even when it
  * succeeds the record write always lands first. So a human genuinely disposing a candidate for
- * real (`stored`/`documented`) in the window between this worker's plan and its apply loop was
+ * real (`stored`/`documented`) in the window between this worker's plan and its apply loop is
  * invisible to the plan, and `settleByExternalId`/`patch()` is an UNCONDITIONAL merge-PATCH with
  * no compare-and-swap — the auto-ignore would silently overwrite the correct verdict with no
- * conflict signal. Fixed: immediately before acting on a queue, re-fetch that queue's CURRENT
+ * conflict signal. So immediately before acting on a queue, re-fetch that queue's CURRENT
  * pending set from records (fresh `bySession`, not the file) and only settle a candidate that is
  * STILL `pending` there. Anything a human (or a concurrent run) already resolved is skipped, not
- * overwritten. This is exactly the re-check discipline the paragraph above already claimed and
- * did not actually apply at the one place it mattered.
+ * overwritten.
  *
  * THE OFF SWITCH IS CHECKED HERE TOO, NOT ONLY BY THE SPAWNING PARENT — same discipline
  * `reap.mjs`'s own header states for its kill switch ("checked before `force`, deliberately...
@@ -74,10 +73,10 @@ const reasonFor = (why) => `${why} — auto-ignored by the orphan-cap backstop; 
  * debounced run), never as "still pending" by default: silence must never read as permission.
  *
  * A MAP, NOT A SET OF "STILL PENDING" IDS — a candidate absent from the map (no record at all: it
- * predates the file-to-record dual-write cutover, so closing it needs a one-time migration outside
- * this worker's own reach) and a candidate PRESENT but already settled by someone else are
+ * was proposed before candidates were written to records, so closing it needs a one-time migration
+ * outside this worker's own reach) and a candidate PRESENT but already settled by someone else are
  * different facts and must be counted differently (`missing` vs `alreadySettled` below);
- * collapsing them to one boolean is a real diagnostic regression — both are safe (neither ever
+ * collapsing them to one boolean loses a diagnostic — both are safe (neither ever
  * gets overwritten), but only one of them means "this candidate needs that one-time migration".
  */
 async function currentlyPending(sid) {
